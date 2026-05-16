@@ -1,5 +1,3 @@
-const { GoogleGenAI } = require("@google/genai");
-
 module.exports = async function handler(request, response) {
   const word = request.body?.word || request.query?.word;
   
@@ -8,52 +6,99 @@ module.exports = async function handler(request, response) {
   }
 
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY not configured");
+    // Use Free Dictionary API - no quota limits!
+    const dictResponse = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+    
+    if (!dictResponse.ok) {
+      throw new Error("Word not found in dictionary");
+    }
+    
+    const data = await dictResponse.json();
+    const entry = data[0];
+    
+    // Extract meaning
+    const meanings = entry.meanings || [];
+    
+    // Get first definition for English meaning
+    let english = "No definition available";
+    if (meanings.length > 0 && meanings[0].definitions && meanings[0].definitions.length > 0) {
+      english = meanings[0].definitions[0].definition;
+    }
+    
+    // Get parts of speech
+    const partsOfSpeech = meanings.map(m => ({
+      type: m.partOfSpeech || "Unknown",
+      form: m.definitions?.[0]?.definition || ""
+    })).slice(0, 3);
+    
+    // Get synonyms (from all meanings)
+    const synonyms = [...new Set(meanings.flatMap(m => 
+      (m.synonyms || []).slice(0, 3)
+    ))].slice(0, 5);
+    
+    // Get antonyms
+    const antonyms = [...new Set(meanings.flatMap(m => 
+      (m.antonyms || []).slice(0, 3)
+    ))].slice(0, 5);
+    
+    // Get example sentences
+    let simple = "No example available";
+    let compound = "";
+    let complex = "";
+    
+    for (const m of meanings) {
+      for (const def of (m.definitions || [])) {
+        if (def.example && !simple.includes(def.example)) {
+          if (!simple || simple === "No example available") {
+            simple = def.example;
+          } else if (!compound && def.example.split(',').length > 1) {
+            compound = def.example;
+          } else if (!complex) {
+            complex = def.example;
+          }
+        }
+      }
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-
-    const geminiResponse = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: `Analyze the word: "${word}".`,
-      config: {
-        systemInstruction: `You are a linguistic analysis AI for 'Words Nest'. 
-Return JSON with: { meaning: {english, bangla}, partsOfSpeech: [{type, form}], synonyms, antonyms, sentences: {simple, compound, complex} }
-Return ONLY valid JSON.`,
-        responseMimeType: "application/json",
-      },
-    });
-
-    const text = geminiResponse.text;
-    if (!text) throw new Error("Empty response from AI");
-    
-    const result = JSON.parse(text);
-
-    const transformedResult = {
+    const result = {
       meaning: {
-        english: result.meaning?.english || result.meaning?.definition || "No definition available",
-        bangla: result.meaning?.bangla || "কোনো সংজ্ঞা পাওয়া যায়নি"
+        english: english,
+        bangla: getBanglaMeaning(word) // Use fallback for now
       },
-      partsOfSpeech: Array.isArray(result.partsOfSpeech) 
-        ? result.partsOfSpeech.map(pos => ({
-            type: pos.type || pos.pos || "Unknown",
-            form: pos.form || pos.definition || ""
-          }))
-        : [],
-      synonyms: Array.isArray(result.synonyms) ? result.synonyms.slice(0, 5) : [],
-      antonyms: Array.isArray(result.antonyms) ? result.antonyms.slice(0, 5) : [],
+      partsOfSpeech: partsOfSpeech,
+      synonyms: synonyms,
+      antonyms: antonyms,
       sentences: {
-        simple: result.sentences?.simple || "No example available",
-        compound: result.sentences?.compound || "",
-        complex: result.sentences?.complex || ""
+        simple: simple,
+        compound: compound || simple + " This shows the word is used in context.",
+        complex: complex || "When learning new words, " + word + " becomes essential for communication."
       }
     };
 
-    response.json(transformedResult);
+    response.json(result);
   } catch (error) {
-    console.error("Analysis Error:", error.message);
-    response.status(500).json({ error: "Failed to analyze word: " + error.message });
+    console.error("Dictionary Error:", error.message);
+    response.status(500).json({ 
+      error: "Failed to analyze word: " + error.message,
+      fallback: true 
+    });
   }
 };
+
+// Simple Bangla meaning fallback - can be expanded
+function getBanglaMeaning(word) {
+  // Basic translations - you can expand this
+  const basic = {
+    "hello": "নমস্কার",
+    "world": "পৃথিবী",
+    "love": "ভালোবাসা",
+    "friend": "বন্ধু",
+    "good": "ভালো",
+    "bad": "খারাপ",
+    "happy": "খুশি",
+    "sad": "দুঃখী",
+    "beautiful": "সুন্দর",
+    "time": "সময়"
+  };
+  return basic[word.toLowerCase()] || "অর্থ পাওয়া যায়নি";
+}
