@@ -29,8 +29,8 @@ export default function Login({ onLogin }: LoginProps) {
     
     setTimeout(() => {
       // Use environment variables for authentication
-      const validEmail = adminEmail || "admin@wordsnest.edu";
-      const validPassword = adminPassword || "admin123";
+      const validEmail = "rahikulmakhtum147@gmail.com";
+      const validPassword = "Abirbd@#12";
       
       if (email === validEmail && password === validPassword) {
         onLogin();
