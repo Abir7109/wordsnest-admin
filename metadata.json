@@ -1,0 +1,6 @@
+{
+  "name": "Words Nest Admin",
+  "description": "A sophisticated administrative terminal for managing vocabulary, AI configurations, and platform analytics with a scholarly, warm-dark aesthetic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

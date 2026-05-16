@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Source Serif 4", serif;
+
+  --color-surface: #19120e;
+  --color-surface-dim: #19120e;
+  --color-surface-bright: #403733;
+  --color-surface-container-lowest: #130d09;
+  --color-surface-container-low: #211a16;
+  --color-surface-container: #261e1a;
+  --color-surface-container-high: #302824;
+  --color-surface-container-highest: #3c332f;
+  --color-on-surface: #efdfd9;
+  --color-on-surface-variant: #d0c5ba;
+  --color-inverse-surface: #efdfd9;
+  --color-inverse-on-surface: #372f2a;
+  --color-outline: #988f85;
+  --color-outline-variant: #4d463d;
+  --color-surface-tint: #d8c3aa;
+  --color-primary: #e6d0b6;
+  --color-on-primary: #3b2e1c;
+  --color-primary-container: #c9b59c;
+  --color-on-primary-container: #554633;
+  --color-inverse-primary: #6b5c47;
+  --color-secondary: #aad0ad;
+  --color-on-secondary: #16371f;
+  --color-secondary-container: #2d4e33;
+  --color-on-secondary-container: #99be9d;
+  --color-tertiary: #ced4e3;
+  --color-on-tertiary: #2a313c;
+  --color-tertiary-container: #b2b8c7;
+  --color-on-tertiary-container: #434955;
+  --color-error: #ffb4ab;
+  --color-on-error: #690005;
+  --color-error-container: #93000a;
+  --color-on-error-container: #ffdad6;
+  --color-primary-fixed: #f5dfc5;
+  --color-primary-fixed-dim: #d8c3aa;
+  --color-on-primary-fixed: #241a09;
+  --color-on-primary-fixed-variant: #534431;
+  --color-secondary-fixed: #c6ecc8;
+  --color-secondary-fixed-dim: #aad0ad;
+  --color-on-secondary-fixed: #00210b;
+  --color-on-secondary-fixed-variant: #2d4e33;
+  --color-tertiary-fixed: #dde2f2;
+  --color-tertiary-fixed-dim: #c0c6d6;
+  --color-on-tertiary-fixed: #151c27;
+  --color-on-tertiary-fixed-variant: #414753;
+  --color-background: #19120e;
+  --color-on-background: #efdfd9;
+  --color-surface-variant: #3c332f;
+
+  --spacing-base: 4px;
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-gutter: 20px;
+  --spacing-margin: 32px;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-on-surface font-sans antialiased;
+  }
+
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    display: inline-block;
+    vertical-align: middle;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+  }
+}
