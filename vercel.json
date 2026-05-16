@@ -1,5 +1,13 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "framework": "vite"
+  "framework": "vite",
+  "functions": {
+    "api/analyze.ts": {
+      "runtime": "nodejs20"
+    },
+    "api/notify.ts": {
+      "runtime": "nodejs20"
+    }
+  }
 }
