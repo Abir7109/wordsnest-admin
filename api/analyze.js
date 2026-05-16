@@ -1,8 +1,11 @@
 const { GoogleGenAI } = require("@google/genai");
 
 module.exports = async function handler(request, response) {
-  if (request.method !== 'POST') {
-    return response.status(405).json({ error: 'Method not allowed' });
+  // Support both POST and GET for testing
+  const word = request.body?.word || request.query?.word;
+  
+  if (!word) {
+    return response.status(400).json({ error: "Word is required. Use ?word=hello or POST {word:'hello'}" });
   }
 
   const { word } = request.body || {};
