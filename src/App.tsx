@@ -33,6 +33,25 @@ export default function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [requests, setRequests] = useState<RequestLog[]>([]);
 
+  // Fetch requests from Firestore on load
+  useEffect(() => {
+    fetch('/api/get-logs')
+      .then(res => res.json())
+      .then(data => {
+        if (data.logs) {
+          setRequests(data.logs.map((log: any) => ({
+            id: log.id,
+            word: log.word,
+            userId: log.userID || 'anonymous',
+            timestamp: log.timestamp?.replace('T', ' ').split('.')[0] || new Date().toISOString(),
+            status: log.status === 'Success' ? 'Success' : 'Error',
+            time: '100ms'
+          })));
+        }
+      })
+      .catch(err => console.log('Failed to fetch logs:', err));
+  }, []);
+
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
   const addNotification = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
