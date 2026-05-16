@@ -1,8 +1,33 @@
 export default async function handler(request, response) {
-  const word = request.body?.word || request.query?.word;
+  // Debug logging
+  console.log("Method:", request.method);
+  console.log("Query:", request.query);
+  console.log("Body:", JSON.stringify(request.body));
+  
+  // Get word from query or body
+  let word = request.query?.word;
+  
+  // Handle POST request body
+  if (!word && request.body) {
+    if (typeof request.body === 'string') {
+      try {
+        const parsed = JSON.parse(request.body);
+        word = parsed.word;
+      } catch (e) {
+        console.log("Failed to parse body string");
+      }
+    } else {
+      word = request.body.word;
+    }
+  }
+  
+  console.log("Word:", word);
   
   if (!word) {
-    return response.status(400).json({ error: "Word is required" });
+    return response.status(400).json({ 
+      error: "Word is required. Use ?word=hello or POST {word:'hello'}",
+      debug: { method: request.method, body: request.body }
+    });
   }
 
   try {
