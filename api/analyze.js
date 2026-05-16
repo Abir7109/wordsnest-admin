@@ -1,39 +1,30 @@
-const https = require('https');
-
-module.exports = async function handler(request, response) {
+export default async function handler(request, response) {
   const word = request.body?.word || request.query?.word;
   
   if (!word) {
-    return response.status(400).json({ error: "Word is required. Use ?word=hello or POST {word:'hello'}" });
+    return response.status(400).json({ error: "Word is required" });
   }
 
-  // Use Free Dictionary API
-  const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
-
   try {
-    const data = await new Promise((resolve, reject) => {
-      https.get(url, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            resolve(JSON.parse(data));
-          } catch (e) {
-            reject(new Error("Invalid JSON"));
-          }
-        });
-      }).on('error', reject);
-    });
-
-    if (!Array.isArray(data) || data.length === 0) {
+    const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
+    
+    const res = await fetch(url);
+    
+    if (!res.ok) {
       throw new Error("Word not found");
+    }
+    
+    const data = await res.json();
+    
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error("No data");
     }
 
     const entry = data[0];
     const meanings = entry.meanings || [];
     
     let english = "No definition available";
-    if (meanings.length > 0 && meanings[0].definitions?.[0]) {
+    if (meanings[0]?.definitions?.[0]) {
       english = meanings[0].definitions[0].definition;
     }
     
@@ -79,9 +70,9 @@ module.exports = async function handler(request, response) {
     response.json(result);
   } catch (error) {
     console.error("Error:", error.message);
-    response.status(500).json({ error: "Failed to find word: " + word });
+    response.status(500).json({ error: "Failed to find word: " + error.message });
   }
-};
+}
 
 function getBanglaMeaning(word) {
   const basic = {
@@ -97,9 +88,7 @@ function getBanglaMeaning(word) {
     "water": "পানি",
     "food": "খাবার",
     "day": "দিন",
-    "night": "রাত",
-    "sun": "সূর্য",
-    "moon": "চাঁদ"
+    "night": "রাত"
   };
   return basic[word.toLowerCase()] || "অর্থ অনুপলব্ধ";
 }
