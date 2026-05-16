@@ -1,26 +1,22 @@
 const { GoogleGenAI } = require("@google/genai");
 
 module.exports = async function handler(request, response) {
-  // Support both POST and GET for testing
   const word = request.body?.word || request.query?.word;
   
   if (!word) {
     return response.status(400).json({ error: "Word is required. Use ?word=hello or POST {word:'hello'}" });
   }
 
-  const { word } = request.body || {};
-  
-  if (!word) {
-    return response.status(400).json({ error: "Word is required" });
-  }
-
-  const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-  });
-
   try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY not configured");
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+
     const geminiResponse = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: `Analyze the word: "${word}".`,
       config: {
         systemInstruction: `You are a linguistic analysis AI for 'Words Nest'. 
@@ -31,7 +27,7 @@ Return ONLY valid JSON.`,
     });
 
     const text = geminiResponse.text;
-    if (!text) throw new Error("Empty response");
+    if (!text) throw new Error("Empty response from AI");
     
     const result = JSON.parse(text);
 
@@ -57,7 +53,7 @@ Return ONLY valid JSON.`,
 
     response.json(transformedResult);
   } catch (error) {
-    console.error("Analysis Error:", error);
-    response.status(500).json({ error: "Failed to analyze word" });
+    console.error("Analysis Error:", error.message);
+    response.status(500).json({ error: "Failed to analyze word: " + error.message });
   }
 };
