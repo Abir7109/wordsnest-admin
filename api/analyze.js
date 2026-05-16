@@ -1,32 +1,40 @@
 export default async function handler(request, response) {
-  // Debug logging
-  console.log("Method:", request.method);
-  console.log("Query:", request.query);
-  console.log("Body:", JSON.stringify(request.body));
+  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
-  // Get word from query or body
-  let word = request.query?.word;
+  if (request.method === 'OPTIONS') {
+    return response.status(200).end();
+  }
+
+  let word = null;
   
-  // Handle POST request body
-  if (!word && request.body) {
-    if (typeof request.body === 'string') {
-      try {
-        const parsed = JSON.parse(request.body);
-        word = parsed.word;
-      } catch (e) {
-        console.log("Failed to parse body string");
+  // Try to get word from any source
+  if (request.method === 'GET' && request.query?.word) {
+    word = request.query.word;
+  } else if (request.method === 'POST') {
+    // Handle JSON body
+    if (request.body) {
+      if (typeof request.body === 'string') {
+        try {
+          word = JSON.parse(request.body).word;
+        } catch (e) {
+          // Try form data
+          const params = new URLSearchParams(request.body);
+          word = params.get('word');
+        }
+      } else {
+        word = request.body.word;
       }
-    } else {
-      word = request.body.word;
     }
   }
   
-  console.log("Word:", word);
-  
+  console.log("Received request for word:", word, "method:", request.method);
+
   if (!word) {
     return response.status(400).json({ 
-      error: "Word is required. Use ?word=hello or POST {word:'hello'}",
-      debug: { method: request.method, body: request.body }
+      error: "Word is required",
+      hint: "Use GET ?word=hello or POST {word:'hello'}"
     });
   }
 
@@ -36,13 +44,13 @@ export default async function handler(request, response) {
     const res = await fetch(url);
     
     if (!res.ok) {
-      throw new Error("Word not found");
+      throw new Error(`Word not found (${res.status})`);
     }
     
     const data = await res.json();
     
     if (!Array.isArray(data) || data.length === 0) {
-      throw new Error("No data");
+      throw new Error("No data from dictionary");
     }
 
     const entry = data[0];
@@ -92,6 +100,7 @@ export default async function handler(request, response) {
       }
     };
 
+    console.log("Sending response for:", word);
     response.json(result);
   } catch (error) {
     console.error("Error:", error.message);
