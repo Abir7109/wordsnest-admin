@@ -28,23 +28,25 @@ console.log("FCM_SERVICE_ACCOUNT starts with:", process.env.FCM_SERVICE_ACCOUNT?
 // Source 1: Environment variable
 if (process.env.FCM_SERVICE_ACCOUNT) {
   try {
-    // Handle escaped newlines in the JSON string - try multiple formats
     let fcmAccount = process.env.FCM_SERVICE_ACCOUNT;
     
-    // Strategy 1: Replace escaped \n with actual newlines
-    fcmAccount = fcmAccount.replace(/\\n/g, '\n');
+    // The JSON may have literal newlines in the private_key field
+    // We need to escape them properly before parsing
     
-    // Strategy 2: Replace literal \n (backslash + n) with newlines (for JSON strings)
-    fcmAccount = fcmAccount.replace(/\\\\n/g, '\n');
-    fcmAccount = fcmAccount.replace(/\\n/g, '\n');
+    // Fix: Replace actual newlines inside the private_key string with \n
+    // The pattern is: "private_key": "-----BEGIN PRIVATE KEY-----\n actual key \n-----END PRIVATE KEY-----\n"
+    fcmAccount = fcmAccount.replace(/"private_key":\s*"([\s\S]*?)"\s*[,}]/g, (match, keyContent) => {
+      // Escape the literal newlines in the key content
+      const escapedKey = keyContent.replace(/\n/g, '\\n').replace(/\r/g, '');
+      return `"private_key": "${escapedKey}"`;
+    });
     
-    // Strategy 3: Try replacing just the key patterns in private_key
-    // The private_key field has -----BEGIN PRIVATE KEY-----\n...-----END PRIVATE KEY-----\n
-    const keyMatch = fcmAccount.match(/"private_key":\s*"([^"]+)"/);
-    if (keyMatch) {
-      const fixedKey = keyMatch[1].replace(/\\n/g, '\n').replace(/\\\\n/g, '\n');
-      fcmAccount = fcmAccount.replace(keyMatch[0], `"private_key": "${fixedKey}"`);
-    }
+    // Also fix any other string values that might have literal newlines
+    // Replace all literal newlines with escaped version
+    fcmAccount = fcmAccount.replace(/\n/g, '\\n').replace(/\r/g, '');
+    
+    // Also handle the case where newlines are already partially escaped
+    fcmAccount = fcmAccount.replace(/\\\\n/g, '\\n');
     
     serviceAccount = JSON.parse(fcmAccount);
     console.log("✅ Loaded Firebase config from environment variable");
