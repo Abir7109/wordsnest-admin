@@ -776,7 +776,6 @@ app.get("/api/install-analytics", async (req, res) => {
     const now = Date.now();
     const oneDayAgo = now - (1 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
-    const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
 
     // Get total installs
     console.log("  📥 Reading installs collection...");
@@ -788,9 +787,30 @@ app.get("/api/install-analytics", async (req, res) => {
     const usersSnap = await firestore.collection("users").get();
     const users = usersSnap.docs.map(d => d.data());
     
-    // Active users = users who sent heartbeat in last 24 hours
-    const activeUsers = users.filter(u => u.last_active >= oneDayAgo).length;
-    console.log("  ✅ Active users (last 24h):", activeUsers);
+    // Get latest heartbeat timestamp from heartbeats collection
+    const heartbeatsSnap = await firestore.collection("heartbeats")
+      .orderBy("timestamp", "desc")
+      .limit(1)
+      .get();
+    
+    let latestHeartbeat = 0;
+    if (!heartbeatsSnap.empty) {
+      latestHeartbeat = heartbeatsSnap.docs[0].data().timestamp;
+      console.log("  📡 Latest heartbeat:", latestHeartbeat);
+    }
+    
+    // Active users = users with last_active within 24h of latest heartbeat
+    // OR users with last_active in last 24h (fresh installs)
+    const activeUsers = users.filter(u => {
+      const lastActive = u.last_active || 0;
+      // If we have a heartbeat, check if user is within 24h of it
+      if (latestHeartbeat > 0 && lastActive > 0) {
+        return Math.abs(latestHeartbeat - lastActive) <= oneDayAgo;
+      }
+      // Otherwise just check last 24h
+      return lastActive >= oneDayAgo;
+    }).length;
+    console.log("  ✅ Active users:", activeUsers);
 
     // Likely uninstalled = total installs - active users
     // (installs without current activity = uninstalled/reinstalled)
