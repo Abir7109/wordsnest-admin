@@ -82,10 +82,19 @@ export default function App() {
   }, []);
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: string }[]>([]);
 
   const addNotification = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    // Add to notifications center (persistent)
     const newNotif = { id: Math.random().toString(36).substr(2, 9), message, type, timestamp: new Date() };
     setNotifications(prev => [newNotif, ...prev].slice(0, 10));
+    
+    // Also show toast popup (auto-dismiss after 3s)
+    const toastId = Math.random().toString(36).substr(2, 9);
+    setToasts(prev => [...prev, { id: toastId, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== toastId));
+    }, 3000);
   };
 
   const addRequest = (log: Omit<RequestLog, 'id' | 'timestamp'>) => {
@@ -186,25 +195,25 @@ export default function App() {
           </div>
         </main>
 
-        {/* Global Toast Notifications */}
+        {/* Global Toast Notifications - auto-dismiss after 3s */}
         <div className="fixed bottom-6 right-6 z-[100] flex flex-col gap-sm items-end pointer-events-none">
           <AnimatePresence>
-            {notifications.slice(0, 3).map((n) => (
+            {toasts.map((t) => (
               <motion.div
-                key={n.id}
+                key={t.id}
                 initial={{ opacity: 0, x: 20, scale: 0.9 }}
                 animate={{ opacity: 1, x: 0, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.1 } }}
                 className="pointer-events-auto bg-surface-container-high border border-outline-variant rounded-xl p-md shadow-2xl flex items-center gap-md min-w-[300px] max-w-md"
               >
-                {n.type === 'success' && <CheckCircle2 className="text-secondary shrink-0" size={20} />}
-                {n.type === 'error' && <AlertCircle className="text-error shrink-0" size={20} />}
-                {n.type === 'info' && <Bell className="text-primary shrink-0" size={20} />}
+                {t.type === 'success' && <CheckCircle2 className="text-secondary shrink-0" size={20} />}
+                {t.type === 'error' && <AlertCircle className="text-error shrink-0" size={20} />}
+                {t.type === 'info' && <Bell className="text-primary shrink-0" size={20} />}
                 
-                <p className="text-sm font-bold text-on-surface flex-1">{n.message}</p>
+                <p className="text-sm font-bold text-on-surface flex-1">{t.message}</p>
                 
                 <button 
-                  onClick={() => setNotifications(prev => prev.filter(notif => notif.id !== n.id))}
+                  onClick={() => setToasts(prev => prev.filter(toast => toast.id !== t.id))}
                   className="text-on-surface-variant hover:text-on-surface p-1"
                 >
                   <X size={16} />

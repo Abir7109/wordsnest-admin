@@ -71,7 +71,7 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
         console.log('Setting stats:', data);
         setStats(data);
       }
-      onNotify('Stats refreshed', 'success');
+      // No notification on auto-refresh to avoid disturbing the user
     } catch (err) {
       console.error('Failed to fetch install stats:', err);
       // Don't show error - just set empty stats
