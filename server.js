@@ -26,28 +26,41 @@ console.log("FCM configured:", !!FCM_SERVICE_ACCOUNT);
 
 // Initialize Firebase Admin for FCM
 let firebaseAdmin = null;
-if (FCM_SERVICE_ACCOUNT) {
+let messaging = null;
+
+async function initFirebase() {
+  if (!FCM_SERVICE_ACCOUNT) {
+    console.log("FCM: No service account, push notifications disabled");
+    return;
+  }
+  
   try {
     const admin = await import('firebase-admin');
     firebaseAdmin = admin.initializeApp({
       credential: admin.credential.cert(FCM_SERVICE_ACCOUNT)
     });
+    messaging = firebaseAdmin.messaging();
     console.log("Firebase Admin initialized for Push Notifications");
   } catch (e) {
     console.log("Firebase Admin init failed:", e.message);
   }
 }
 
+initFirebase();
+
 // Send push notification via FCM
 async function sendPushNotification(token, title, body) {
-  if (!firebaseAdmin || !token) return false;
+  if (!messaging || !token) {
+    console.log("Push: No messaging or token, skipping");
+    return false;
+  }
   
   try {
     const message = {
       notification: { title, body },
       token: token
     };
-    await firebaseAdmin.messaging().send(message);
+    await messaging.send(message);
     console.log("Push notification sent to:", token.substring(0, 20) + "...");
     return true;
   } catch (e) {
