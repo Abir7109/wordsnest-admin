@@ -767,9 +767,29 @@ app.get("/api/install-analytics-new", async (req, res) => {
   return res.json({ status: "new endpoint works", now: Date.now() });
 });
 
-app.get("/api/install-analytics", (req, res) => {
-  // Hardcoded test - no async
-  res.json({ totalInstalls: 999, activeUsers: 1, uninstalls: 0, recentInstalls: [] });
+app.get("/api/install-analytics", async (req, res) => {
+  try {
+    const now = Date.now();
+    const oneDayAgo = now - (24 * 60 * 60 * 1000);
+    const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
+
+    const installsSnap = await firestore.collection("installs").get();
+    const usersSnap = await firestore.collection("users").get();
+    
+    const users = usersSnap.docs.map(d => d.data());
+    
+    const activeUsers = users.filter(u => (u.last_active || 0) >= oneDayAgo).length;
+    const uninstalls = users.filter(u => now - (u.last_active || 0) > sevenDaysAgo).length;
+
+    res.json({
+      totalInstalls: installsSnap.size,
+      activeUsers,
+      uninstalls,
+      recentInstalls: installsSnap.docs.slice(0, 10).map(d => ({ id: d.id, ...d.data() }))
+    });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
 });
 
 // Debug endpoint - mirror of test-firestore for comparison
