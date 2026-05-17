@@ -47,10 +47,10 @@ app.get("/api/experiences", async (req, res) => {
     }
     const snap = await firestore.collection("experiences")
       .where("approved", "==", true)
-      .orderBy("createdAt", "desc")
-      .limit(20)
       .get();
-    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    res.json(data.slice(0, 20));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -62,10 +62,10 @@ app.get("/api/admin/experiences", async (req, res) => {
     if (!firestore) {
       return res.status(503).json({ error: "Database not available" });
     }
-    const snap = await firestore.collection("experiences")
-      .orderBy("createdAt", "desc")
-      .get();
-    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    const snap = await firestore.collection("experiences").get();
+    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
