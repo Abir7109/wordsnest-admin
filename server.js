@@ -352,6 +352,16 @@ Guidelines:
   }
 }
 
+// Debug endpoint to verify deployment
+app.get("/api/debug", (req, res) => {
+  res.json({ 
+    message: "Server is running updated code",
+    timestamp: new Date().toISOString(),
+    apiKeyLength: GEMINI_API_KEY?.length,
+    apiKeyPrefix: GEMINI_API_KEY?.substring(0, 5)
+  });
+});
+
 // Test AI endpoint
 app.get("/api/test-ai", async (req, res) => {
   const word = req.query?.word || "beautiful";
