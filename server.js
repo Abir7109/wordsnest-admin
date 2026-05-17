@@ -11,8 +11,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDR34t-jQtydqffemwigfx0mexjYcRvdKM";
-const GROQ_API_KEY = process.env.GROQ_API_KEY || "gsk_WpRq8QhSYCkRwkKwyN8vWGdyb3FYtYfXQpVHbVZFzK5sLrTj";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
 
 console.log("=== SERVER STARTED ===");
 console.log("GEMINI_API_KEY loaded:", GEMINI_API_KEY ? "YES (" + GEMINI_API_KEY.length + " chars)" : "NO");
@@ -307,13 +308,14 @@ Guidelines:
         console.log("Gemini error response:", errText);
         
         // Try Groq as fallback
-        if (GROQ_API_KEY && GROQ_API_KEY.length > 10) {
-          console.log("Trying Groq as fallback...");
+        const groqKeys = [GROQ_API_KEY, GROQ_API_KEY_2].filter(k => k && k.length > 10);
+        for (const groqKey of groqKeys) {
+          console.log("Trying Groq with key:", groqKey.substring(0, 10) + "...");
           try {
             const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
               method: "POST",
               headers: { 
-                "Authorization": "Bearer " + GROQ_API_KEY,
+                "Authorization": "Bearer " + groqKey,
                 "Content-Type": "application/json"
               },
               body: JSON.stringify({
@@ -343,6 +345,7 @@ Guidelines:
                 simple = aiData.simple || "";
                 compound = aiData.compound || "";
                 complex = aiData.complex || "";
+                break; // Success, exit loop
               }
             }
           } catch (groqErr) {
