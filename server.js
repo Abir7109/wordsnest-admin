@@ -753,6 +753,11 @@ app.post("/api/app-config", async (req, res) => {
 });
 
 // Install Analytics - Get install stats from Firestore
+app.get("/api/install-analytics-v2", async (req, res) => {
+  console.log("📊 v2 called");
+  return res.json({ test: "v2 works", total: 999 });
+});
+
 app.get("/api/install-analytics", async (req, res) => {
   console.log("📊 /api/install-analytics called");
   console.log("  firestore available:", !!firestore);
@@ -767,13 +772,6 @@ app.get("/api/install-analytics", async (req, res) => {
         recentInstalls: []
       });
     }
-
-    app.get("/api/install-analytics-v2", async (req, res) => {
-  console.log("📊 v2 called");
-  return res.json({ test: "v2 works", total: 999 });
-});
-
-app.get("/api/install-analytics", async (req, res) => {
 
     const now = Date.now();
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
