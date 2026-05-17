@@ -213,7 +213,7 @@ async function generateHandler(req, res) {
   const word = req.method === 'POST' ? req.body?.word : req.query?.word;
   const userIdFromRequest = req.body?.user_id || req.query?.user_id || "unknown";
   
-  console.log("=== GENERATE ENDPOINT CALLED ===");
+  console.log("=== GENERATE ENDPOINT CALLED (UPDATED) ===");
   console.log("Word:", word, "UserID:", userIdFromRequest);
   console.log("API Key exists:", !!GEMINI_API_KEY, "Key length:", GEMINI_API_KEY?.length);
   
