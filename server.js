@@ -763,7 +763,11 @@ app.get("/api/install-analytics-v2", async (req, res) => {
 });
 
 app.get("/api/install-analytics", async (req, res) => {
-  console.log("📊 /api/install-analytics called");
+  console.log("📊 /api/install-analytics called at", new Date().toISOString());
+  
+  // Immediate response to test
+  return res.json({ test: "immediate", firestore: !!firestore });
+  
   console.log("  firestore available:", !!firestore);
   
   try {
