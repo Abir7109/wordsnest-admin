@@ -823,9 +823,7 @@ const now = Date.now();
     });
   } catch (e) {
     console.log("  ❌ Error:", e.message);
-    console.log("  ❌ Stack:", e.stack);
-    res.status(500).json({
-      error: e.message,
+    res.json({
       totalInstalls: 0,
       activeUsers: 0,
       uninstalls: 0,
