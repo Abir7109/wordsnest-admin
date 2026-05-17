@@ -90,15 +90,17 @@ async function analyzeHandler(req, res) {
       }
     }
 
-    // If no synonyms/antonyms/sentences, try using simple fallback
+    // If no synonyms/antonyms/sentences, use IELTS AI
     const needsAI = synonyms.length === 0 || antonyms.length === 0 || !simple;
     if (needsAI && GEMINI_API_KEY) {
       try {
+        const prompt = `You are an experienced IELTS vocabulary teacher. For "${word}", provide 5 synonyms, 3 antonyms, and 1 simple example sentence. Return JSON: {"synonyms":[],"antonyms":[],"simple":""}`;
+        
         const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `For "${word}" provide synonyms (5), antonyms (3), example (1). Return JSON: {"synonyms":[],"antonyms":[],"simple":""}` }] }],
+            contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { responseMimeType: "application/json" }
           })
         });
@@ -173,16 +175,36 @@ async function generateHandler(req, res) {
       }));
     }
 
-    // Use Gemini AI for synonyms/sentences
-    let synonyms = [], antonyms = [], simple = "";
+    // Use Gemini AI for synonyms/sentences - IELTS Professional
+    let synonyms = [], antonyms = [], simple = "", compound = "", complex = "";
     
     if (GEMINI_API_KEY) {
+      const prompt = `You are an experienced IELTS vocabulary teacher. For the word "${word}", generate:
+
+1. 5 high-quality synonyms (common IELTS words)
+2. 3 antonyms (opposites)
+3. A simple sentence (beginner level)
+4. A compound sentence (intermediate level)  
+5. A complex sentence (advanced level)
+
+Return ONLY this JSON format:
+{"synonyms":["word1","word2","word3","word4","word5"],"antonyms":["word1","word2","word3"],"simple":"simple sentence","compound":"compound sentence","complex":"complex sentence"}
+
+Guidelines:
+- Synonyms should be commonly used in IELTS writing/speaking
+- Sentences should demonstrate proper grammar
+- Complex sentence must have a dependent clause
+- Keep sentences practical and educational`;
+
       const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `For "${word}" provide synonyms (5), antonyms (3), example (1). Return JSON: {"synonyms":[],"antonyms":[],"simple":""}` }] }],
-          generationConfig: { responseMimeType: "application/json" }
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { 
+            responseMimeType: "application/json",
+            temperature: 0.7
+          }
         })
       });
       
@@ -195,6 +217,8 @@ async function generateHandler(req, res) {
           synonyms = aiData.synonyms?.slice(0, 5) || [];
           antonyms = aiData.antonyms?.slice(0, 3) || [];
           simple = aiData.simple || "";
+          compound = aiData.compound || "";
+          complex = aiData.complex || "";
         }
       }
     }
@@ -208,11 +232,12 @@ async function generateHandler(req, res) {
       antonyms,
       sentences: {
         simple: simple || "No example available",
-        compound: "Practice makes perfect with " + word,
-        complex: "Understanding " + word + " helps improve your vocabulary."
+        compound: compound || (simple ? simple + " It is commonly used in daily conversations." : "Practice makes perfect with " + word + "."),
+        complex: complex || ("Learning " + word + " is essential for improving your English proficiency.")
       }
     };
 
+    console.log("Generated for", word, "- synonyms:", synonyms.length, "antonyms:", antonyms.length);
     logRequest(word, req.body?.userID || req.query?.userID, true);
     return res.json(result);
   } catch (error) {
