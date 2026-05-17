@@ -770,7 +770,7 @@ app.get("/api/install-analytics-new", async (req, res) => {
 app.get("/api/install-analytics", async (req, res) => {
   try {
     const now = Date.now();
-    const oneDayAgo = now - (24 * 60 * 60 * 1000);
+    const oneHourAgo = now - (60 * 60 * 1000);
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
 
     const installsSnap = await firestore.collection("installs").get();
@@ -778,7 +778,7 @@ app.get("/api/install-analytics", async (req, res) => {
     
     const users = usersSnap.docs.map(d => d.data());
     
-    const activeUsers = users.filter(u => (u.last_active || 0) >= oneDayAgo).length;
+    const activeUsers = users.filter(u => (u.last_active || 0) >= oneHourAgo).length;
     const uninstalls = users.filter(u => now - (u.last_active || 0) > sevenDaysAgo).length;
 
     res.json({
