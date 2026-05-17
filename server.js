@@ -45,9 +45,8 @@ app.get("/api/experiences", async (req, res) => {
     if (!firestore) {
       return res.status(503).json({ error: "Database not available" });
     }
-    const snap = await firestore.collection("experiences")
-      .where("approved", "==", true)
-      .get();
+    // Show ALL experiences (including unapproved) for now
+    const snap = await firestore.collection("experiences").get();
     const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     res.json(data.slice(0, 20));
