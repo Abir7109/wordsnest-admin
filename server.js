@@ -820,6 +820,22 @@ app.get("/api/install-analytics", async (req, res) => {
   }
 });
 
+// Debug endpoint - mirror of test-firestore for comparison
+app.get("/api/debug-installs", async (req, res) => {
+  console.log("🔍 /api/debug-installs called");
+  try {
+    if (!firestore) {
+      return res.json({ error: "Firestore not connected" });
+    }
+    const installsSnap = await firestore.collection("installs").get();
+    console.log("  Installs found:", installsSnap.size);
+    res.json({ count: installsSnap.size });
+  } catch (e) {
+    console.log("  Error:", e.message);
+    res.json({ error: e.message });
+  }
+});
+
 // Debug endpoint - check Firebase status
 app.get("/api/debug-firebase", (req, res) => {
   res.json({
