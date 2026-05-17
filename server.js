@@ -84,6 +84,19 @@ app.patch("/api/admin/experiences/:id", async (req, res) => {
   }
 });
 
+// Admin: Delete experience
+app.delete("/api/admin/experiences/:id", async (req, res) => {
+  try {
+    if (!firestore) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+    await firestore.collection("experiences").doc(req.params.id).delete();
+    res.json({ message: "Deleted" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
