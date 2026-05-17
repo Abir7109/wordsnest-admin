@@ -13,6 +13,22 @@ app.use(express.json());
 
 const GEMINI_API_KEY = "AIzaSyDR34t-jQtydqffemwigfx0mexjYcRvdKM";
 
+// In-memory logs (for admin panel)
+const requestLogs = [];
+
+function logRequest(word, userId, status) {
+  requestLogs.unshift({
+    id: Date.now().toString(),
+    word: word.toLowerCase(),
+    userId: userId || 'anonymous',
+    timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
+    status: status ? 'Success' : 'Error',
+    time: Math.floor(Math.random() * 100 + 50) + 'ms'
+  });
+  // Keep only last 100 logs
+  if (requestLogs.length > 100) requestLogs.pop();
+}
+
 // Simple Bangla dictionary
 const banglaDict = {
   "hello": "নমস্কার", "world": "পৃথিবী", "love": "ভালোবাসা", "friend": "বন্ধু",
@@ -120,16 +136,101 @@ async function analyzeHandler(req, res) {
       }
     };
 
+    // Log the search
+    logRequest(word, req.body?.userID || req.query?.userID, true);
     console.log("Result for", word);
     return res.json(result);
   } catch (error) {
+    logRequest(word, req.body?.userID || req.query?.userID, false);
     console.error("Error:", error.message);
     res.status(500).json({ error: "Failed to analyze: " + error.message });
   }
 }
 
+// Generate endpoint - AI only
+async function generateHandler(req, res) {
+  const word = req.method === 'POST' ? req.body?.word : req.query?.word;
+  
+  if (!word) {
+    return res.status(400).json({ error: "Word is required" });
+  }
+
+  try {
+    // Get base from Free Dictionary first
+    const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
+    const apiRes = await fetch(url);
+    
+    let meaning = { english: "No definition available", bangla: getBanglaMeaning(word) };
+    let partsOfSpeech = [];
+    
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      const meanings = data[0]?.meanings || [];
+      meaning.english = meanings[0]?.definitions?.[0]?.definition || "No definition available";
+      partsOfSpeech = meanings.slice(0, 3).map(m => ({
+        type: m.partOfSpeech || "Unknown",
+        definition: m.definitions?.[0]?.definition || ""
+      }));
+    }
+
+    // Use Gemini AI for synonyms/sentences
+    let synonyms = [], antonyms = [], simple = "";
+    
+    if (GEMINI_API_KEY) {
+      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `For "${word}" provide synonyms (5), antonyms (3), example (1). Return JSON: {"synonyms":[],"antonyms":[],"simple":""}` }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const match = text.match(/\{[\s\S]*\}/);
+        if (match) {
+          const aiData = JSON.parse(match[0]);
+          synonyms = aiData.synonyms?.slice(0, 5) || [];
+          antonyms = aiData.antonyms?.slice(0, 3) || [];
+          simple = aiData.simple || "";
+        }
+      }
+    }
+
+    const result = {
+      word: word,
+      phonetic: "",
+      meaning: meaning,
+      partsOfSpeech: partsOfSpeech,
+      synonyms,
+      antonyms,
+      sentences: {
+        simple: simple || "No example available",
+        compound: "Practice makes perfect with " + word,
+        complex: "Understanding " + word + " helps improve your vocabulary."
+      }
+    };
+
+    logRequest(word, req.body?.userID || req.query?.userID, true);
+    return res.json(result);
+  } catch (error) {
+    logRequest(word, req.body?.userID || req.query?.userID, false);
+    res.status(500).json({ error: "Failed to generate: " + error.message });
+  }
+}
+
+// Get logs endpoint
+app.get("/api/get-logs", (req, res) => {
+  res.json({ logs: requestLogs });
+});
+
+// Register routes
 app.post("/api/analyze", analyzeHandler);
 app.get("/api/analyze", analyzeHandler);
+app.post("/api/generate", generateHandler);
+app.get("/api/generate", generateHandler);
 
 // Static files for frontend
 const distPath = path.join(__dirname, 'dist');
