@@ -767,7 +767,7 @@ app.get("/api/install-analytics-new", async (req, res) => {
   return res.json({ status: "new endpoint works", now: Date.now() });
 });
 
-app.get("/api/install-analytics", (req, res) => {
+app.get("/api/install-analytics-simple-test", (req, res) => {
   // Hardcoded test - no async
   res.json({ totalInstalls: 999, activeUsers: 1, uninstalls: 0, recentInstalls: [] });
 });
