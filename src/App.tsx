@@ -10,6 +10,7 @@ import Dashboard from "@/src/components/Dashboard";
 import Users from "@/src/components/Users";
 import Requests from "@/src/components/Requests";
 import AIConfig from "@/src/components/AIConfig";
+import AppControl from "@/src/components/AppControl";
 import Notifications from "@/src/components/Notifications";
 import Analytics from "@/src/components/Analytics";
 import Login from "@/src/components/Login";
@@ -109,6 +110,8 @@ export default function App() {
         return <Requests requests={requests} setRequests={setRequests} onNotify={addNotification} />;
       case "aiconfig":
         return <AIConfig onNotify={addNotification} onAddRequest={addRequest} />;
+      case "appcontrol":
+        return <AppControl onNotify={addNotification} />;
       case "notifications":
         return <Notifications notifications={notifications} setNotifications={setNotifications} users={users} onNotify={addNotification} />;
       case "analytics":
@@ -124,6 +127,7 @@ export default function App() {
       case "users": return "User Database";
       case "requests": return "Request Logs";
       case "aiconfig": return "AI Configuration";
+      case "appcontrol": return "App Control";
       case "notifications": return "Notification Center";
       case "analytics": return "Platform Analytics";
       default: return "Words Nest Admin";

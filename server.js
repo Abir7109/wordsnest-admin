@@ -1,7 +1,12 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
+// Load .env file if exists
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,7 +19,54 @@ app.use(express.json());
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
-const FCM_SERVICE_ACCOUNT = process.env.FCM_SERVICE_ACCOUNT ? JSON.parse(process.env.FCM_SERVICE_ACCOUNT) : null;
+
+// Firebase service account - try multiple sources
+let serviceAccount = null;
+
+// Source 1: Environment variable
+if (process.env.FCM_SERVICE_ACCOUNT) {
+  try {
+    serviceAccount = JSON.parse(process.env.FCM_SERVICE_ACCOUNT);
+    console.log("Loaded Firebase config from environment variable");
+  } catch (e) {
+    console.log("Failed to parse FCM_SERVICE_ACCOUNT env var");
+  }
+}
+
+// Source 2: Local file (for development)
+if (!serviceAccount) {
+  const serviceAccountPath = path.join(__dirname, 'firebase-service-account.json');
+  if (fs.existsSync(serviceAccountPath)) {
+    try {
+      serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+      console.log("Loaded Firebase config from local file");
+    } catch (e) {
+      console.log("Failed to load from local file:", e.message);
+    }
+  }
+}
+
+// Source 3: Admin website project folder (alternative paths)
+if (!serviceAccount) {
+  const altPaths = [
+    path.join(__dirname, '..', 'words-nest-firebase-adminsdk-fbsvc-4760102650.json'),
+    path.join(__dirname, '..', '..', 'words-nest-firebase-adminsdk-fbsvc-4760102650.json'),
+    path.join(process.cwd(), 'words-nest-firebase-adminsdk-fbsvc-4760102650.json'),
+    'C:\\Users\\Abir\\Downloads\\words-nest-firebase-adminsdk-fbsvc-4760102650.json'
+  ];
+  
+  for (const p of altPaths) {
+    if (fs.existsSync(p)) {
+      try {
+        serviceAccount = JSON.parse(fs.readFileSync(p, 'utf8'));
+        console.log("Loaded Firebase config from:", p);
+        break;
+      } catch (e) {
+        console.log("Failed to load from:", p);
+      }
+    }
+  }
+}
 
 // FCM token storage
 const fcmTokens = new Map(); // userId -> token
@@ -22,49 +74,37 @@ const fcmTokens = new Map(); // userId -> token
 console.log("=== SERVER STARTED ===");
 console.log("GEMINI_API_KEY loaded:", GEMINI_API_KEY ? "YES (" + GEMINI_API_KEY.length + " chars)" : "NO");
 console.log("GROQ_API_KEY loaded:", GROQ_API_KEY ? "YES (" + GROQ_API_KEY.length + " chars)" : "NO");
-console.log("FCM configured:", !!FCM_SERVICE_ACCOUNT);
+console.log("Firebase Service Account loaded:", !!serviceAccount);
 
 // Initialize Firebase Admin for FCM
 let messaging = null;
+let firestore = null;
 
 async function initFirebase() {
   try {
     const firebaseAdmin = await import('firebase-admin');
     const admin = firebaseAdmin.default || firebaseAdmin;
-    console.log("Firebase admin exports:", Object.keys(admin));
-    console.log("Has credential:", !!admin.credential);
     
     let adminApp;
     
-    if (FCM_SERVICE_ACCOUNT) {
-      let serviceAccount = FCM_SERVICE_ACCOUNT;
-      if (typeof serviceAccount === 'string') {
-        try { serviceAccount = JSON.parse(serviceAccount); }
-        catch { serviceAccount = null; }
-      }
-      
-      if (serviceAccount && serviceAccount.private_key) {
-        console.log("Using service account credential");
-        adminApp = admin.initializeApp({
-          credential: admin.credential.cert(serviceAccount)
-        });
-      } else {
-        console.log("Invalid service account, trying Application Default");
-        adminApp = admin.initializeApp({
-          credential: admin.credential.applicationDefault()
-        });
-      }
-    } else {
-      console.log("No service account, trying Application Default");
+    if (serviceAccount && serviceAccount.private_key) {
+      console.log("Using service account credential");
       adminApp = admin.initializeApp({
-        credential: admin.credential.applicationDefault()
+        credential: admin.credential.cert(serviceAccount)
       });
+    } else {
+      console.log("No valid service account, Firebase Admin unavailable");
+      console.log("App config will use fallback mode (in-memory)");
+      return;
     }
     
     messaging = adminApp.messaging();
-    console.log("Firebase Admin initialized for Push Notifications");
+    
+    // Initialize Firestore
+    firestore = admin.firestore();
+    console.log("✅ Firebase Admin initialized - Firestore connected!");
   } catch (e) {
-    console.log("Firebase Admin init failed:", e.message, e.stack);
+    console.log("Firebase Admin init failed:", e.message);
   }
 }
 
@@ -620,6 +660,141 @@ app.post("/api/register", (req, res) => {
     console.log("User registered:", userId);
   }
   res.json({ success: true, userId });
+});
+
+// App Config - Firestore
+const APP_CONFIG_COLLECTION = "current_version";
+
+app.get("/api/app-config", async (req, res) => {
+  try {
+    if (firestore) {
+      // Try to get document by known ID first
+      const doc = await firestore.collection(APP_CONFIG_COLLECTION).doc("config").get();
+      if (doc.exists && doc.data()) {
+        console.log("App config loaded from Firestore (doc: config)");
+        return res.json({ config: doc.data() });
+      }
+      
+      // Try to get the first document in the collection
+      const snapshot = await firestore.collection(APP_CONFIG_COLLECTION).limit(1).get();
+      if (!snapshot.empty) {
+        const firstDoc = snapshot.docs[0];
+        console.log("App config loaded from Firestore (doc:", firstDoc.id, ")");
+        return res.json({ config: firstDoc.data() });
+      }
+      
+      // No documents found - create default
+      console.log("No app config found in Firestore, using defaults");
+    }
+    
+    // Fallback to default if Firestore not available or no documents
+    const defaultConfig = {
+      current_version: "1.0.0",
+      min_required_version: "1.0.0",
+      force_update: false,
+      soft_update: false,
+      update_url: "",
+      update_message: "A new version is available!",
+      under_maintenance: false,
+      maintenance_title: "Under Maintenance",
+      maintenance_message: "We'll be back soon!",
+      maintenance_estimated_time: "",
+      is_app_alive: true
+    };
+    res.json({ config: defaultConfig });
+  } catch (e) {
+    console.log("Error loading app config:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/app-config", async (req, res) => {
+  const { config } = req.body;
+  if (!config) {
+    return res.status(400).json({ error: "Config required" });
+  }
+  
+  try {
+    if (firestore) {
+      // Try to save to known document ID first
+      await firestore.collection(APP_CONFIG_COLLECTION).doc("config").set(config, { merge: true });
+      console.log("App config saved to Firestore (doc: config)");
+      return res.json({ success: true, config });
+    } else {
+      console.log("Firestore not available, config not saved");
+      return res.status(503).json({ error: "Firestore not available" });
+    }
+  } catch (e) {
+    console.log("Error saving app config:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Install Analytics - Get install stats from Firestore
+app.get("/api/install-analytics", async (req, res) => {
+  try {
+    if (!firestore) {
+      // Fallback to in-memory data if Firestore not available
+      return res.json({
+        totalInstalls: 0,
+        activeUsers: 0,
+        likelyUninstalled: 0,
+        recentInstalls: []
+      });
+    }
+
+    const now = Date.now();
+    const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+
+    // Get total installs
+    const installsSnap = await firestore.collection("installs").get();
+    const totalInstalls = installsSnap.size;
+
+    // Get active users (last_active >= 7 days ago, status = active)
+    const activeQuery = await firestore.collection("users")
+      .where("last_active", ">=", sevenDaysAgo)
+      .where("status", "==", "active")
+      .get();
+    const activeUsers = activeQuery.size;
+
+    // Get likely uninstalled (last_active <= 30 days ago)
+    const inactiveQuery = await firestore.collection("users")
+      .where("last_active", "<=", thirtyDaysAgo)
+      .get();
+    const likelyUninstalled = inactiveQuery.size;
+
+    // Get recent installs (last 10)
+    const recentInstalls = installsSnap.docs
+      .slice(0, 10)
+      .map(doc => ({
+        userId: doc.id,
+        ...doc.data()
+      }));
+
+    console.log("Install analytics:", { totalInstalls, activeUsers, likelyUninstalled });
+
+    res.json({
+      totalInstalls,
+      activeUsers,
+      likelyUninstalled,
+      recentInstalls
+    });
+  } catch (e) {
+    console.log("Error getting install analytics:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Debug endpoint - check Firebase status
+app.get("/api/debug-firebase", (req, res) => {
+  res.json({
+    firebaseAdmin: !!serviceAccount,
+    firestore: !!firestore,
+    messaging: !!messaging,
+    serviceAccountLoaded: !!serviceAccount,
+    serviceAccountProject: serviceAccount?.project_id || null
+  });
 });
 
 // Register routes

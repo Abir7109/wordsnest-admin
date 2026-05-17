@@ -1,14 +1,36 @@
-import { BarChart3, TrendingUp, PieChart as PieChartIcon, Download, Calendar, Activity } from "lucide-react";
+import { BarChart3, TrendingUp, PieChart as PieChartIcon, Download, Calendar, Activity, Users, Smartphone, UserX, Clock } from "lucide-react";
 import { cn } from "@/src/lib/utils";
 import { RequestLog } from "../types";
 import { motion } from "motion/react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie } from 'recharts';
+import { useState, useEffect } from "react";
 
 interface AnalyticsProps {
   requests: RequestLog[];
 }
 
+interface InstallStats {
+  totalInstalls: number;
+  activeUsers: number;
+  likelyUninstalled: number;
+  recentInstalls: any[];
+}
+
 export default function Analytics({ requests }: AnalyticsProps) {
+  const [installStats, setInstallStats] = useState<InstallStats>({
+    totalInstalls: 0,
+    activeUsers: 0,
+    likelyUninstalled: 0,
+    recentInstalls: []
+  });
+
+  useEffect(() => {
+    fetch('/api/install-analytics')
+      .then(res => res.json())
+      .then(data => setInstallStats(data))
+      .catch(err => console.log('Failed to fetch install analytics:', err));
+  }, []);
+
   const successCount = requests.filter(r => r.status === 'Success').length;
   const errorCount = requests.filter(r => r.status === 'Error').length;
 
@@ -144,6 +166,82 @@ export default function Analytics({ requests }: AnalyticsProps) {
                 </div>
               ))}
            </div>
+        </div>
+
+        {/* Install Analytics Section */}
+        <div className="lg:col-span-12 bg-surface-container border border-outline-variant rounded-2xl p-xl shadow-2xl">
+          <div className="flex items-center gap-sm mb-lg">
+            <Smartphone size={24} className="text-primary" />
+            <h3 className="text-xl font-bold text-on-surface">Install Analytics</h3>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-lg mb-xl">
+            <div className="bg-surface-container-high rounded-xl p-lg border border-outline-variant">
+              <div className="flex items-center gap-sm mb-md">
+                <Users size={18} className="text-primary" />
+                <span className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Total Installs</span>
+              </div>
+              <p className="text-3xl font-display font-bold text-on-surface">{installStats.totalInstalls}</p>
+            </div>
+            
+            <div className="bg-surface-container-high rounded-xl p-lg border border-outline-variant">
+              <div className="flex items-center gap-sm mb-md">
+                <Activity size={18} className="text-secondary" />
+                <span className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Active Users (7 days)</span>
+              </div>
+              <p className="text-3xl font-display font-bold text-secondary">{installStats.activeUsers}</p>
+            </div>
+            
+            <div className="bg-surface-container-high rounded-xl p-lg border border-outline-variant">
+              <div className="flex items-center gap-sm mb-md">
+                <UserX size={18} className="text-error" />
+                <span className="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">Likely Uninstalled (30 days)</span>
+              </div>
+              <p className="text-3xl font-display font-bold text-error">{installStats.likelyUninstalled}</p>
+            </div>
+          </div>
+
+          {installStats.recentInstalls.length > 0 && (
+            <div>
+              <h4 className="text-lg font-semibold text-on-surface mb-md flex items-center gap-sm">
+                <Clock size={18} className="text-on-surface-variant" />
+                Recent Installs
+              </h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-outline-variant">
+                      <th className="text-left py-sm px-md text-on-surface-variant font-bold text-[11px] uppercase">User ID</th>
+                      <th className="text-left py-sm px-md text-on-surface-variant font-bold text-[11px] uppercase">App Version</th>
+                      <th className="text-left py-sm px-md text-on-surface-variant font-bold text-[11px] uppercase">Device</th>
+                      <th className="text-left py-sm px-md text-on-surface-variant font-bold text-[11px] uppercase">Install Date</th>
+                      <th className="text-left py-sm px-md text-on-surface-variant font-bold text-[11px] uppercase">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {installStats.recentInstalls.map((install: any, i: number) => (
+                      <tr key={i} className="border-b border-outline-variant/50 hover:bg-surface-container-high transition-colors">
+                        <td className="py-sm px-md text-on-surface font-mono text-xs">{install.user_id || install.userId || 'N/A'}</td>
+                        <td className="py-sm px-md text-on-surface">{install.app_version || 'N/A'}</td>
+                        <td className="py-sm px-md text-on-surface">{install.device_model || 'Unknown'}</td>
+                        <td className="py-sm px-md text-on-surface">
+                          {install.install_date ? new Date(install.install_date).toLocaleDateString() : 'N/A'}
+                        </td>
+                        <td className="py-sm px-md">
+                          <span className={cn(
+                            "px-sm py-xs rounded-full text-[10px] font-bold uppercase",
+                            install.status === 'active' ? "bg-secondary/20 text-secondary" : "bg-error/20 text-error"
+                          )}>
+                            {install.status || 'unknown'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

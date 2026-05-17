@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Clock, BrainCircuit, Bell, BarChart3, LogOut, X } from "lucide-react";
+import { LayoutDashboard, Users, Clock, BrainCircuit, Bell, BarChart3, LogOut, X, Smartphone } from "lucide-react";
 import { cn } from "@/src/lib/utils";
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ const navItems = [
   { id: 'users', label: 'Users', icon: Users },
   { id: 'requests', label: 'Requests', icon: Clock },
   { id: 'aiconfig', label: 'AI Config', icon: BrainCircuit },
+  { id: 'appcontrol', label: 'App Control', icon: Smartphone },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
 ];
