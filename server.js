@@ -30,23 +30,18 @@ if (process.env.FCM_SERVICE_ACCOUNT) {
   try {
     let fcmAccount = process.env.FCM_SERVICE_ACCOUNT;
     
-    // The JSON may have literal newlines in the private_key field
-    // We need to escape them properly before parsing
+    console.log("Full env var length:", fcmAccount.length);
+    console.log("Checking for control characters...");
     
-    // Fix: Replace actual newlines inside the private_key string with \n
-    // The pattern is: "private_key": "-----BEGIN PRIVATE KEY-----\n actual key \n-----END PRIVATE KEY-----\n"
-    fcmAccount = fcmAccount.replace(/"private_key":\s*"([\s\S]*?)"\s*[,}]/g, (match, keyContent) => {
-      // Escape the literal newlines in the key content
-      const escapedKey = keyContent.replace(/\n/g, '\\n').replace(/\r/g, '');
-      return `"private_key": "${escapedKey}"`;
-    });
+    // Check if there are actual newline characters (ASCII 10)
+    const hasNewlines = fcmAccount.includes('\n');
+    console.log("Has actual newlines:", hasNewlines);
     
-    // Also fix any other string values that might have literal newlines
-    // Replace all literal newlines with escaped version
-    fcmAccount = fcmAccount.replace(/\n/g, '\\n').replace(/\r/g, '');
-    
-    // Also handle the case where newlines are already partially escaped
-    fcmAccount = fcmAccount.replace(/\\\\n/g, '\\n');
+    // Replace actual newlines with escaped version
+    if (hasNewlines) {
+      fcmAccount = fcmAccount.replace(/\n/g, '\\n').replace(/\r/g, '');
+      console.log("After escaping newlines, length:", fcmAccount.length);
+    }
     
     serviceAccount = JSON.parse(fcmAccount);
     console.log("✅ Loaded Firebase config from environment variable");
@@ -54,6 +49,7 @@ if (process.env.FCM_SERVICE_ACCOUNT) {
     console.log("Client email:", serviceAccount.client_email);
   } catch (e) {
     console.log("❌ Failed to parse FCM_SERVICE_ACCOUNT:", e.message);
+    console.log("JSON sample:", process.env.FCM_SERVICE_ACCOUNT.substring(1800, 1900));
   }
 }
 
