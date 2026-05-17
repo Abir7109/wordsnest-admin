@@ -787,14 +787,15 @@ app.get("/api/install-analytics", async (req, res) => {
     const usersSnap = await firestore.collection("users").get();
     const users = usersSnap.docs.map(d => d.data());
     
+    // Active users = users with recent activity and active status
     const activeUsers = users.filter(u => 
       u.last_active >= sevenDaysAgo && u.status === "active"
     ).length;
     console.log("  ✅ Active users:", activeUsers);
 
-    const likelyUninstalled = users.filter(u => 
-      u.last_active < thirtyDaysAgo
-    ).length;
+    // Likely uninstalled = total installs minus active users
+    // (installs without corresponding active user = reinstalls/uninstalls)
+    const likelyUninstalled = Math.max(0, totalInstalls - activeUsers);
     console.log("  ✅ Likely uninstalled:", likelyUninstalled);
 
     // Get recent installs (last 10)
