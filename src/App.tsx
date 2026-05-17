@@ -29,27 +29,54 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  // Shared State
+// Shared State
   const [users, setUsers] = useState<User[]>([]);
   const [requests, setRequests] = useState<RequestLog[]>([]);
+  const [stats, setStats] = useState({ totalUsers: 0, activeUsers: 0, inactiveUsers: 0, totalSearches: 0 });
 
-  // Fetch requests from Firestore on load
+  // Fetch requests from server every 2 seconds for live updates
   useEffect(() => {
-    fetch('/api/get-logs')
-      .then(res => res.json())
-      .then(data => {
-        if (data.logs) {
-          setRequests(data.logs.map((log: any) => ({
-            id: log.id,
-            word: log.word,
-            userId: log.userID || 'anonymous',
-            timestamp: log.timestamp?.replace('T', ' ').split('.')[0] || new Date().toISOString(),
-            status: log.status === 'Success' ? 'Success' : 'Error',
-            time: '100ms'
-          })));
-        }
-      })
-      .catch(err => console.log('Failed to fetch logs:', err));
+    const fetchData = () => {
+      fetch('/api/get-logs')
+        .then(res => res.json())
+        .then(data => {
+          // Update requests
+          if (data.logs) {
+            const newLogs = data.logs.map((log: any) => ({
+              id: log.id,
+              word: log.word,
+              userId: log.userId || log.guestId || 'anonymous',
+              timestamp: log.timestamp || new Date().toISOString(),
+              status: log.status === 'Success' ? 'Success' : 'Error',
+              time: log.time || '100ms'
+            }));
+            setRequests(prev => JSON.stringify(prev) !== JSON.stringify(newLogs) ? newLogs : prev);
+          }
+          
+          // Update users
+          if (data.users) {
+            const newUsers = data.users.map((u: any) => ({
+              id: u.guestId,
+              name: u.guestId,
+              email: `Active: ${u.status === 'active' ? 'Yes' : 'No'}`,
+              type: u.status === 'active' ? 'Active' : 'Inactive',
+              joinedAt: new Date(u.firstSeen).toLocaleDateString(),
+              searches: u.searchCount || 0
+            } as User));
+            setUsers(prev => JSON.stringify(prev) !== JSON.stringify(newUsers) ? newUsers : prev);
+          }
+          
+          // Update stats
+          if (data.stats) {
+            setStats(data.stats);
+          }
+        })
+        .catch(err => console.log('Failed to fetch:', err));
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 2000);
+    return () => clearInterval(interval);
   }, []);
 
   const [notifications, setNotifications] = useState<Notification[]>([]);

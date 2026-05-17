@@ -13,20 +13,60 @@ app.use(express.json());
 
 const GEMINI_API_KEY = "AIzaSyDR34t-jQtydqffemwigfx0mexjYcRvdKM";
 
-// In-memory logs (for admin panel)
+// In-memory storage
 const requestLogs = [];
+const users = new Map(); // userId -> { id, guestId, firstSeen, lastActive, searchCount, status }
+
+// Track users
+function trackUser(userId, word) {
+  if (!userId || userId === 'anonymous') return;
+  
+  const now = Date.now();
+  const existing = users.get(userId);
+  
+  if (existing) {
+    existing.lastActive = now;
+    existing.searchCount = (existing.searchCount || 0) + 1;
+    existing.status = 'active';
+  } else {
+    users.set(userId, {
+      id: userId,
+      guestId: userId,
+      firstSeen: now,
+      lastActive: now,
+      searchCount: 1,
+      status: 'active'
+    });
+  }
+  
+  // Mark inactive users (not seen in 5 minutes)
+  users.forEach((user, id) => {
+    if (now - user.lastActive > 5 * 60 * 1000 && user.status === 'active') {
+      user.status = 'inactive';
+    }
+  });
+}
 
 function logRequest(word, userId, status) {
+  const userID = userId || 'anonymous';
+  trackUser(userID, word);
+  
   requestLogs.unshift({
     id: Date.now().toString(),
     word: word.toLowerCase(),
-    userId: userId || 'anonymous',
+    userId: userID,
+    guestId: userID,
     timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
     status: status ? 'Success' : 'Error',
     time: Math.floor(Math.random() * 100 + 50) + 'ms'
   });
   // Keep only last 100 logs
   if (requestLogs.length > 100) requestLogs.pop();
+}
+
+// Get users data
+function getUsersData() {
+  return Array.from(users.values()).sort((a, b) => b.lastActive - a.lastActive);
 }
 
 // Simple Bangla dictionary
@@ -246,9 +286,32 @@ Guidelines:
   }
 }
 
-// Get logs endpoint
+// Get logs endpoint with users data
 app.get("/api/get-logs", (req, res) => {
-  res.json({ logs: requestLogs });
+  const usersList = getUsersData();
+  const activeCount = usersList.filter(u => u.status === 'active').length;
+  const inactiveCount = usersList.filter(u => u.status === 'inactive').length;
+  
+  res.json({ 
+    logs: requestLogs,
+    users: usersList,
+    stats: {
+      totalUsers: usersList.length,
+      activeUsers: activeCount,
+      inactiveUsers: inactiveCount,
+      totalSearches: requestLogs.length
+    }
+  });
+});
+
+// User ping endpoint - keep user active
+app.post("/api/ping", (req, res) => {
+  const { userId } = req.body;
+  if (userId && users.has(userId)) {
+    users.get(userId).lastActive = Date.now();
+    users.get(userId).status = 'active';
+  }
+  res.json({ success: true });
 });
 
 // Register routes
