@@ -208,6 +208,11 @@ async function analyzeHandler(req, res) {
 // Generate endpoint - AI only
 async function generateHandler(req, res) {
   const word = req.method === 'POST' ? req.body?.word : req.query?.word;
+  const userIdFromRequest = req.body?.user_id || req.query?.user_id || "unknown";
+  
+  console.log("=== GENERATE ENDPOINT CALLED ===");
+  console.log("Word:", word, "UserID:", userIdFromRequest);
+  console.log("API Key exists:", !!GEMINI_API_KEY, "Key length:", GEMINI_API_KEY?.length);
   
   if (!word) {
     return res.status(400).json({ error: "Word is required" });
@@ -234,7 +239,7 @@ async function generateHandler(req, res) {
     // Use Gemini AI for synonyms/sentences - IELTS Professional
     let synonyms = [], antonyms = [], simple = "", compound = "", complex = "";
     
-    if (GEMINI_API_KEY) {
+    if (GEMINI_API_KEY && GEMINI_API_KEY.length > 10) {
       const prompt = `You are an experienced IELTS vocabulary teacher. For the word "${word}", generate:
 
 1. 5 high-quality synonyms (common IELTS words)
@@ -252,6 +257,8 @@ Guidelines:
 - Complex sentence must have a dependent clause
 - Keep sentences practical and educational`;
 
+      console.log("Calling Gemini API for generate...");
+      
       const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -264,19 +271,28 @@ Guidelines:
         })
       });
       
+      console.log("Gemini response status:", response.status);
+      
       if (response.ok) {
         const data = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        console.log("Gemini raw response:", text.substring(0, 300));
         const match = text.match(/\{[\s\S]*\}/);
         if (match) {
           const aiData = JSON.parse(match[0]);
+          console.log("Parsed AI data:", JSON.stringify(aiData));
           synonyms = aiData.synonyms?.slice(0, 5) || [];
           antonyms = aiData.antonyms?.slice(0, 3) || [];
           simple = aiData.simple || "";
           compound = aiData.compound || "";
           complex = aiData.complex || "";
         }
+      } else {
+        const errText = await response.text();
+        console.log("Gemini error response:", errText);
       }
+    } else {
+      console.log("Skipping AI - no valid API key");
     }
 
     const result = {
@@ -293,8 +309,9 @@ Guidelines:
       }
     };
 
-    console.log("Generated for", word, "- synonyms:", synonyms.length, "antonyms:", antonyms.length);
-    logRequest(word, req.body?.userID || req.query?.userID, true);
+    console.log("Generated for", word, "- synonyms:", synonyms.length, "antonyms:", antonyms.length, "simple:", simple.substring(0, 50));
+    const userIdFromRequest = req.body?.user_id || req.query?.user_id || "unknown";
+    logRequest(word, userIdFromRequest, true);
     return res.json(result);
   } catch (error) {
     logRequest(word, req.body?.userID || req.query?.userID, false);
