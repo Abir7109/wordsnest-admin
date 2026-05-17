@@ -774,6 +774,7 @@ app.get("/api/install-analytics", async (req, res) => {
     }
 
     const now = Date.now();
+    const oneDayAgo = now - (1 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
 
@@ -787,14 +788,12 @@ app.get("/api/install-analytics", async (req, res) => {
     const usersSnap = await firestore.collection("users").get();
     const users = usersSnap.docs.map(d => d.data());
     
-    // Active users = users with recent activity and active status
-    const activeUsers = users.filter(u => 
-      u.last_active >= sevenDaysAgo && u.status === "active"
-    ).length;
-    console.log("  ✅ Active users:", activeUsers);
+    // Active users = users who sent heartbeat in last 24 hours
+    const activeUsers = users.filter(u => u.last_active >= oneDayAgo).length;
+    console.log("  ✅ Active users (last 24h):", activeUsers);
 
-    // Likely uninstalled = total installs minus active users
-    // (installs without corresponding active user = reinstalls/uninstalls)
+    // Likely uninstalled = total installs - active users
+    // (installs without current activity = uninstalled/reinstalled)
     const likelyUninstalled = Math.max(0, totalInstalls - activeUsers);
     console.log("  ✅ Likely uninstalled:", likelyUninstalled);
 
