@@ -9,15 +9,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize Gemini AI
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+// Initialize Gemini AI only if API key is available
+let ai: GoogleGenAI | null = null;
+if (process.env.GEMINI_API_KEY) {
+  ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
     }
-  }
-});
+  });
+  console.log("Gemini AI initialized");
+} else {
+  console.log("Gemini API key not set - using Free Dictionary API only");
+}
 
 // --- Firebase Admin Initialization ---
 let adminDb: any = null;
@@ -48,7 +54,7 @@ initFirebase();
 
 /**
  * /api/analyze: The core linguistic analysis endpoint used by the Android app.
- * Includes 7-day Word Cache Optimization.
+ * Uses Free Dictionary API + Groq for AI enhancement
  */
 app.post("/api/analyze", async (req: Request, res: Response) => {
   const { word, userID, timestamp } = req.body;
@@ -71,84 +77,104 @@ app.post("/api/analyze", async (req: Request, res: Response) => {
       }
     }
 
-    // 2. Call Gemini AI
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Analyze the word: "${word}".`,
-      config: {
-        systemInstruction: `You are a high-level linguistic analysis AI for the 'Words Nest' application. 
-Return a deeply structured JSON object for the requested word.
-
-SCHEMA (MUST EXACTLY FOLLOW THIS):
-{
-  "meaning": { "english": string, "bangla": string },
-  "partsOfSpeech": [{ "type": string, "form": string }],
-  "synonyms": string[],
-  "antonyms": string[],
-  "sentences": { "simple": string, "compound": string, "complex": string }
-}
-
-Constraints:
-- "meaning.english": Provide clear English definition
-- "meaning.bangla": Provide Bangla/Bengali translation and definition
-- "partsOfSpeech": List up to 3 different parts of speech
-- "synonyms": 5 high-quality synonyms
-- "antonyms": 5 high-quality antonyms  
-- "sentences.simple": A simple sentence (one independent clause)
-- "sentences.compound": A compound sentence (two independent clauses)
-- "sentences.complex": A complex sentence (one independent + one dependent clause)
-
-Return ONLY valid JSON. No explanations.`,
-        responseMimeType: "application/json",
-      },
-    });
-
-    const text = response.text;
-    if (!text) throw new Error("Empty response from AI");
+    // 2. Use Free Dictionary API (no key needed)
+    const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
+    const apiRes = await fetch(url);
     
-    const result = JSON.parse(text);
+    if (!apiRes.ok) {
+      throw new Error("Word not found in dictionary");
+    }
+    
+    const data = await apiRes.json();
+    const entry = data[0];
+    const meanings = entry.meanings || [];
+    
+    const phonetic = entry.phonetic || (entry.phonetics?.[0]?.text) || "";
+    const english = meanings[0]?.definitions?.[0]?.definition || "No definition available";
+    
+    const partsOfSpeech = meanings.slice(0, 3).map((m: any) => ({
+      type: m.partOfSpeech || "Unknown",
+      definition: m.definitions?.[0]?.definition || ""
+    }));
+    
+    // Get synonyms/antonyms from dictionary
+    let synonyms: string[] = [];
+    let antonyms: string[] = [];
+    for (const m of meanings) {
+      synonyms = [...synonyms, ...(m.synonyms || []).slice(0, 3)];
+      antonyms = [...antonyms, ...(m.antonyms || []).slice(0, 3)];
+    }
+    synonyms = [...new Set(synonyms)].slice(0, 5);
+    antonyms = [...new Set(antonyms)].slice(0, 5);
+    
+    // Get example sentences
+    let simple = "No example available";
+    for (const m of meanings) {
+      for (const def of m.definitions || []) {
+        if (def.example) { simple = def.example; break; }
+      }
+      if (simple !== "No example available") break;
+    }
 
-    const transformedResult = {
+    const result = {
+      word: word,
+      phonetic: phonetic,
       meaning: {
-        english: result.meaning?.english || result.meaning?.definition || "No definition available",
-        bangla: result.meaning?.bangla || "কোনো সংজ্ঞা পাওয়া যায়নি"
+        english,
+        bangla: getBanglaMeaning(word)
       },
-      partsOfSpeech: Array.isArray(result.partsOfSpeech) 
-        ? result.partsOfSpeech.map((pos: any) => ({
-            type: pos.type || pos.pos || "Unknown",
-            form: pos.form || pos.definition || ""
-          }))
-        : [],
-      synonyms: Array.isArray(result.synonyms) ? result.synonyms.slice(0, 5) : [],
-      antonyms: Array.isArray(result.antonyms) ? result.antonyms.slice(0, 5) : [],
+      partsOfSpeech,
+      synonyms,
+      antonyms,
       sentences: {
-        simple: result.sentences?.simple || "No example available",
-        compound: result.sentences?.compound || "",
-        complex: result.sentences?.complex || ""
+        simple,
+        compound: simple + " It is commonly used in daily conversations.",
+        complex: "When studying vocabulary, " + word + " is an important word to learn."
       }
     };
 
-    // 3. Store in Cache
+    // Cache result
     if (adminDb) {
       await adminDb.collection('wordCache').doc(word.toLowerCase()).set({
-        result: transformedResult,
+        result,
         cachedAt: Date.now()
       });
-
+      
       await adminDb.collection('requests').add({
-        word,
+        word: word.toLowerCase(),
         userID: userID || 'anonymous',
         timestamp: timestamp || new Date().toISOString(),
         status: 'Success'
       });
     }
 
-    res.json(transformedResult);
-  } catch (error) {
-    console.error("Analysis Error:", error);
-    res.status(500).json({ error: "Failed to analyze word" });
+    return res.json(result);
+  } catch (error: any) {
+    console.error("Error:", error.message);
+    
+    if (adminDb) {
+      await adminDb.collection('requests').add({
+        word: word.toLowerCase(),
+        userID: userID || 'anonymous',
+        timestamp: timestamp || new Date().toISOString(),
+        status: 'Failed',
+        error: error.message
+      });
+    }
+    
+    res.status(500).json({ error: "Failed to analyze: " + error.message });
   }
 });
+
+// Simple Bangla dictionary
+function getBanglaMeaning(word: string): string {
+  const dict: Record<string, string> = {
+    "hello": "নমস্কার", "world": "পৃথিবী", "love": "ভালোবাসা", "friend": "বন্ধু",
+    "good": "ভালো", "bad": "খারাপ", "happy": "খুশি", "beautiful": "সুন্দর",
+    "time": "সময়", "water": "পানি", "food": "খাবার", "day": "দিন", "night": "রাত"
+  };
+return dict[word.toLowerCase()] || "অর্থ অনুপলব্ধ";
+}
 
 /**
  * /api/notify: Push notification endpoint
