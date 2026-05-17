@@ -26,10 +26,15 @@ let serviceAccount = null;
 // Source 1: Environment variable
 if (process.env.FCM_SERVICE_ACCOUNT) {
   try {
-    serviceAccount = JSON.parse(process.env.FCM_SERVICE_ACCOUNT);
+    // Handle escaped newlines in the JSON string
+    let fcmeAccount = process.env.FCM_SERVICE_ACCOUNT;
+    // Replace escaped newlines with actual newlines
+    fcmeAccount = fcmeAccount.replace(/\\n/g, '\n');
+    serviceAccount = JSON.parse(fcmeAccount);
     console.log("Loaded Firebase config from environment variable");
+    console.log("Project ID:", serviceAccount.project_id);
   } catch (e) {
-    console.log("Failed to parse FCM_SERVICE_ACCOUNT env var");
+    console.log("Failed to parse FCM_SERVICE_ACCOUNT env var:", e.message);
   }
 }
 
