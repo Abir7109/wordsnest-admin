@@ -138,46 +138,58 @@ async function analyzeHandler(req, res) {
       }
     }
 
-    // If no synonyms/antonyms/sentences, use IELTS AI
+    // If no synonyms/antonyms/sentences, use IELTS AI (Groq - Free!)
     const needsAI = synonyms.length === 0 || antonyms.length === 0 || !simple;
-    console.log("needsAI:", needsAI, "API key exists:", !!GEMINI_API_KEY);
+    console.log("needsAI:", needsAI, "Groq keys available:", (GROQ_API_KEY ? 1 : 0) + (GROQ_API_KEY_2 ? 1 : 0));
     
-    if (needsAI && GEMINI_API_KEY && GEMINI_API_KEY.length > 10) {
-      try {
-        const prompt = `You are an experienced IELTS vocabulary teacher. For the word "${word}" (meaning: ${english}), provide: 5 synonyms, 3 antonyms, 1 simple example sentence, 1 compound sentence, 1 complex sentence. Return ONLY valid JSON: {"synonyms":["word1","word2","word3","word4","word5"],"antonyms":["w1","w2","w3"],"simple":"sentence","compound":"sentence","complex":"sentence"}`;
-        console.log("Calling Gemini AI for:", word);
-        
-        const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: "application/json", temperature: 0.7 }
-          })
-        });
-        
-        console.log("AI response status:", response.status);
-        
-        if (response.ok) {
-          const data = await response.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          console.log("AI raw response:", text.substring(0, 200));
-          const match = text.match(/\{[\s\S]*\}/);
-          if (match) {
-            const aiData = JSON.parse(match[0]);
-            console.log("AI parsed data:", aiData);
-            if (synonyms.length === 0 && aiData.synonyms) synonyms = aiData.synonyms.slice(0, 5);
-            if (antonyms.length === 0 && aiData.antonyms) antonyms = aiData.antonyms.slice(0, 3);
-            if (!simple && aiData.simple) simple = aiData.simple;
-            if (aiData.compound) compound = aiData.compound;
-            if (aiData.complex) complex = aiData.complex;
+    const groqKeys = [GROQ_API_KEY, GROQ_API_KEY_2].filter(k => k && k.length > 10);
+    
+    if (needsAI && groqKeys.length > 0) {
+      for (const groqKey of groqKeys) {
+        try {
+          console.log("Calling Groq AI for:", word);
+          
+          const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: { 
+              "Authorization": "Bearer " + groqKey,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              model: "llama-3.1-8b-instant",
+              messages: [{ 
+                role: "user", 
+                content: `You are an IELTS vocabulary teacher. For "${word}" (${english}), provide JSON: {"synonyms":[],"antonyms":[],"simple":"","compound":"","complex":""}`
+              }],
+              temperature: 0.7,
+              response_format: { type: "json_object" }
+            })
+          });
+          
+          console.log("AI response status:", response.status);
+          
+          if (response.ok) {
+            const data = await response.json();
+            const text = data.choices?.[0]?.message?.content || "";
+            console.log("AI response:", text.substring(0, 200));
+            const match = text.match(/\{[\s\S]*\}/);
+            if (match) {
+              const aiData = JSON.parse(match[0]);
+              console.log("AI parsed data:", aiData);
+              if (synonyms.length === 0 && aiData.synonyms) synonyms = aiData.synonyms.slice(0, 5);
+              if (antonyms.length === 0 && aiData.antonyms) antonyms = aiData.antonyms.slice(0, 3);
+              if (!simple && aiData.simple) simple = aiData.simple;
+              if (aiData.compound) compound = aiData.compound;
+              if (aiData.complex) complex = aiData.complex;
+              break; // Success
+            }
           }
+        } catch (e) {
+          console.log("AI failed:", e.message);
         }
-      } catch (e) {
-        console.log("AI failed:", e.message);
       }
     } else {
-      console.log("Skipping AI - no API key or not needed");
+      console.log("Skipping AI - no Groq keys");
     }
 
     const result = {
