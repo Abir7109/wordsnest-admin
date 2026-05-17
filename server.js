@@ -307,6 +307,25 @@ Guidelines:
       console.log("Skipping AI - no valid API key");
     }
 
+    // Fallback: if AI didn't generate, use hardcoded IELTS data
+    if (synonyms.length === 0 || simple === "") {
+      console.log("Using fallback IELTS data for:", word);
+      const ieltsFallback = {
+        "beautiful": { synonyms: ["gorgeous", "stunning", "attractive", "elegant", "lovely"], antonyms: ["ugly", "unattractive", "hideous"], simple: "The sunset was beautiful.", compound: "The sunset was beautiful, and it made everyone feel calm.", complex: "Although the weather was terrible, the beautiful sunset still managed to brighten our mood." },
+        "happy": { synonyms: ["joyful", "delighted", "cheerful", "pleased", "content"], antonyms: ["sad", "unhappy", "miserable"], simple: "She felt happy when she saw her friends.", compound: "She felt happy when she saw her friends, so she smiled.", complex: "Because he had worked hard, he was happy with his results." },
+        "difficult": { synonyms: ["challenging", "complex", "hard", "tough", "demanding"], antonyms: ["easy", "simple", "straightforward"], simple: "The test was difficult.", compound: "The test was difficult, but she managed to pass.", complex: "Although the task was difficult, he completed it successfully." }
+      };
+      
+      const fallback = ieltsFallback[word.toLowerCase()];
+      if (fallback) {
+        synonyms = fallback.synonyms;
+        antonyms = fallback.antonyms;
+        simple = fallback.simple;
+        compound = fallback.compound;
+        complex = fallback.complex;
+      }
+    }
+
     const result = {
       word: word,
       phonetic: "",
