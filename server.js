@@ -425,6 +425,91 @@ app.post("/api/ping", (req, res) => {
   res.json({ success: true });
 });
 
+// In-memory notifications
+const notifications = []; // { id, title, message, targetUsers: null | string[], createdAt, sentBy }
+
+// Get notifications for a user
+app.get("/api/notifications", (req, res) => {
+  const userId = req.query?.userId;
+  if (!userId) {
+    return res.status(400).json({ error: "userId required" });
+  }
+  
+  const userNotifications = notifications
+    .filter(n => !n.targetUsers || n.targetUsers.includes(userId))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map(n => ({
+      id: n.id,
+      title: n.title,
+      message: n.message,
+      createdAt: n.createdAt,
+      isRead: n.readBy?.includes(userId) || false
+    }));
+  
+  res.json({ 
+    notifications: userNotifications,
+    unreadCount: userNotifications.filter(n => !n.isRead).length
+  });
+});
+
+// Mark notification as read
+app.post("/api/notifications/read", (req, res) => {
+  const { notificationId, userId } = req.body;
+  const notif = notifications.find(n => n.id === notificationId);
+  if (notif && userId) {
+    if (!notif.readBy) notif.readBy = [];
+    if (!notif.readBy.includes(userId)) {
+      notif.readBy.push(userId);
+    }
+  }
+  res.json({ success: true });
+});
+
+// Admin: Send notification
+app.post("/api/admin/send-notification", (req, res) => {
+  const { title, message, targetUsers, sentBy } = req.body;
+  
+  if (!title || !message) {
+    return res.status(400).json({ error: "Title and message required" });
+  }
+  
+  const newNotif = {
+    id: Date.now().toString(),
+    title,
+    message,
+    targetUsers: targetUsers || null, // null = all users
+    createdAt: Date.now(),
+    sentBy: sentBy || "Admin",
+    readBy: []
+  };
+  
+  notifications.unshift(newNotif);
+  
+  // Keep only last 100 notifications
+  if (notifications.length > 100) notifications.pop();
+  
+  console.log("Notification sent:", title, "to:", targetUsers || "all users");
+  
+  res.json({ success: true, notification: newNotif });
+});
+
+// Admin: Get all notifications
+app.get("/api/admin/notifications", (req, res) => {
+  const adminNotifications = notifications
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map(n => ({
+      id: n.id,
+      title: n.title,
+      message: n.message,
+      targetUsers: n.targetUsers,
+      createdAt: n.createdAt,
+      sentBy: n.sentBy,
+      recipientCount: n.targetUsers ? n.targetUsers.length : 'all'
+    }));
+  
+  res.json({ notifications: adminNotifications });
+});
+
 // Register user on first app open
 app.post("/api/register", (req, res) => {
   const { userId, deviceInfo } = req.body;
