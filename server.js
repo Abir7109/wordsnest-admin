@@ -768,13 +768,12 @@ app.get("/api/install-analytics", async (req, res) => {
       });
     }
 
-    // DEBUG: Return hardcoded test
-    return res.json({
-      totalInstalls: 999,
-      activeUsers: 1,
-      likelyUninstalled: 0,
-      recentInstalls: []
-    });
+    app.get("/api/install-analytics-v2", async (req, res) => {
+  console.log("📊 v2 called");
+  return res.json({ test: "v2 works", total: 999 });
+});
+
+app.get("/api/install-analytics", async (req, res) => {
 
     const now = Date.now();
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
