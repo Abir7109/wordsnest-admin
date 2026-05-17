@@ -243,121 +243,57 @@ async function generateHandler(req, res) {
       }));
     }
 
-    // Use Gemini AI for synonyms/sentences - IELTS Professional
+    // Use Groq AI for synonyms/sentences - IELTS Professional (Free!)
     let synonyms = [], antonyms = [], simple = "", compound = "", complex = "";
     
-    if (GEMINI_API_KEY && GEMINI_API_KEY.length > 10) {
-      console.log("GEMINI_API_KEY is valid, calling AI...");
-      
-      const prompt = `You are an experienced IELTS vocabulary teacher. For the word "${word}", generate:
-
-1. 5 high-quality synonyms (common IELTS words)
-2. 3 antonyms (opposites)
-3. A simple sentence (beginner level)
-4. A compound sentence (intermediate level)  
-5. A complex sentence (advanced level)
-
-Return ONLY this JSON format:
-{"synonyms":["word1","word2","word3","word4","word5"],"antonyms":["word1","word2","word3"],"simple":"simple sentence","compound":"compound sentence","complex":"complex sentence"}
-
-Guidelines:
-- Synonyms should be commonly used in IELTS writing/speaking
-- Sentences should demonstrate proper grammar
-- Complex sentence must have a dependent clause
-- Keep sentences practical and educational`;
-
-      console.log("Calling Gemini API for generate...");
-      console.log("API Key first 10 chars:", GEMINI_API_KEY?.substring(0, 10));
-      
-      let response;
+    const groqKeys = [GROQ_API_KEY, GROQ_API_KEY_2].filter(k => k && k.length > 10);
+    console.log("Available Groq keys:", groqKeys.length);
+    
+    for (const groqKey of groqKeys) {
+      console.log("Trying Groq with key:", groqKey.substring(0, 10) + "...");
       try {
-        response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
+        const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { 
+            "Authorization": "Bearer " + groqKey,
+            "Content-Type": "application/json"
+          },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { 
-              responseMimeType: "application/json",
-              temperature: 0.7
-            }
+            model: "llama-3.1-8b-instant",
+            messages: [{ 
+              role: "user", 
+              content: `You are an experienced IELTS vocabulary teacher. For the word "${word}", provide 5 synonyms, 3 antonyms, 1 simple sentence, 1 compound sentence, 1 complex sentence. Return ONLY valid JSON: {"synonyms":["w1","w2","w3","w4","w5"],"antonyms":["a1","a2","a3"],"simple":"sentence","compound":"sentence","complex":"sentence"}`
+            }],
+            temperature: 0.7,
+            response_format: { type: "json_object" }
           })
         });
-      } catch (fetchErr) {
-        console.log("Fetch error:", fetchErr.message);
-        throw fetchErr;
-      }
-      
-      console.log("Gemini response status:", response.status);
-      
-      if (response.ok) {
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        console.log("Gemini raw response:", text.substring(0, 300));
-        const match = text.match(/\{[\s\S]*\}/);
-        if (match) {
-          const aiData = JSON.parse(match[0]);
-          console.log("Parsed AI data:", JSON.stringify(aiData));
-          synonyms = aiData.synonyms?.slice(0, 5) || [];
-          antonyms = aiData.antonyms?.slice(0, 3) || [];
-          simple = aiData.simple || "";
-          compound = aiData.compound || "";
-          complex = aiData.complex || "";
-        }
-      } else {
-        const errText = await response.text();
-        console.log("Gemini error response:", errText);
         
-        // Try Groq as fallback
-        const groqKeys = [GROQ_API_KEY, GROQ_API_KEY_2].filter(k => k && k.length > 10);
-        for (const groqKey of groqKeys) {
-          console.log("Trying Groq with key:", groqKey.substring(0, 10) + "...");
-          try {
-            const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-              method: "POST",
-              headers: { 
-                "Authorization": "Bearer " + groqKey,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                model: "llama-3.1-8b-instant",
-                messages: [{ 
-                  role: "user", 
-                  content: `For the word "${word}", provide 5 synonyms, 3 antonyms, 1 simple sentence, 1 compound sentence, 1 complex sentence. Return ONLY valid JSON: {"synonyms":["w1","w2","w3","w4","w5"],"antonyms":["a1","a2","a3"],"simple":"sentence","compound":"sentence","complex":"sentence"}`
-                }],
-                temperature: 0.7,
-                response_format: { type: "json_object" }
-              })
-            });
-            
-            console.log("Groq response status:", groqResponse.status);
-            
-            if (groqResponse.ok) {
-              const groqData = await groqResponse.json();
-              const groqText = groqData.choices?.[0]?.message?.content || "";
-              console.log("Groq response:", groqText.substring(0, 200));
-              
-              const match = groqText.match(/\{[\s\S]*\}/);
-              if (match) {
-                const aiData = JSON.parse(match[0]);
-                console.log("Groq parsed data:", aiData);
-                synonyms = aiData.synonyms?.slice(0, 5) || [];
-                antonyms = aiData.antonyms?.slice(0, 3) || [];
-                simple = aiData.simple || "";
-                compound = aiData.compound || "";
-                complex = aiData.complex || "";
-                break; // Success, exit loop
-              }
-            } else {
-              const groqErrText = await groqResponse.text();
-              console.log("Groq error response:", groqErrText.substring(0, 200));
-            }
-          } catch (groqErr) {
-            console.log("Groq failed:", groqErr.message);
+        console.log("Groq response status:", groqResponse.status);
+        
+        if (groqResponse.ok) {
+          const groqData = await groqResponse.json();
+          const groqText = groqData.choices?.[0]?.message?.content || "";
+          console.log("Groq response:", groqText.substring(0, 200));
+          
+          const match = groqText.match(/\{[\s\S]*\}/);
+          if (match) {
+            const aiData = JSON.parse(match[0]);
+            console.log("Groq parsed data:", aiData);
+            synonyms = aiData.synonyms?.slice(0, 5) || [];
+            antonyms = aiData.antonyms?.slice(0, 3) || [];
+            simple = aiData.simple || "";
+            compound = aiData.compound || "";
+            complex = aiData.complex || "";
+            break; // Success, exit loop
           }
+        } else {
+          const groqErrText = await groqResponse.text();
+          console.log("Groq error response:", groqErrText.substring(0, 200));
         }
+      } catch (groqErr) {
+        console.log("Groq failed:", groqErr.message);
       }
-    } else {
-      console.log("Skipping AI - no valid API key");
     }
 
     // If AI failed, return error message
