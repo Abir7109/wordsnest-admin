@@ -34,15 +34,16 @@ async function initFirebase() {
   }
   
   try {
-    const admin = await import('firebase-admin');
+    const { initializeApp, credential } = await import('firebase-admin/app');
+    const { getMessaging } = await import('firebase-admin/messaging');
     const serviceAccount = FCM_SERVICE_ACCOUNT;
-    const adminApp = admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
+    const adminApp = initializeApp({
+      credential: credential.cert(serviceAccount)
     });
-    messaging = adminApp.messaging();
+    messaging = getMessaging(adminApp);
     console.log("Firebase Admin initialized for Push Notifications");
   } catch (e) {
-    console.log("Firebase Admin init failed:", e.message);
+    console.log("Firebase Admin init failed:", e.message, e.stack);
   }
 }
 
