@@ -813,7 +813,7 @@ const now = Date.now();
         ...doc.data()
       }));
 
-    console.log("  📊 Returning:", { totalInstalls, activeUsers, likelyUninstalled });
+    console.log("  📊 Returning:", { totalInstalls, activeUsers, uninstalls });
 
     res.json({
       totalInstalls,
