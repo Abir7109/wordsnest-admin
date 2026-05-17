@@ -212,9 +212,10 @@ async function analyzeHandler(req, res) {
 async function generateHandler(req, res) {
   const word = req.method === 'POST' ? req.body?.word : req.query?.word;
   const userIdFromRequest = req.body?.user_id || req.query?.user_id || "unknown";
+  const forceFallback = req.query?.force === "true" || req.body?.force === true;
   
   console.log("=== GENERATE ENDPOINT CALLED (UPDATED) ===");
-  console.log("Word:", word, "UserID:", userIdFromRequest);
+  console.log("Word:", word, "UserID:", userIdFromRequest, "ForceFallback:", forceFallback);
   console.log("API Key exists:", !!GEMINI_API_KEY, "Key length:", GEMINI_API_KEY?.length);
   
   if (!word) {
@@ -308,8 +309,8 @@ Guidelines:
     }
 
     // Fallback: if AI didn't generate, use hardcoded IELTS data
-    if (synonyms.length === 0 || simple === "") {
-      console.log("Using fallback IELTS data for:", word);
+    if (forceFallback || synonyms.length === 0 || simple === "") {
+      console.log("Using fallback IELTS data for:", word, "forceFallback:", forceFallback);
       const ieltsFallback = {
         "beautiful": { synonyms: ["gorgeous", "stunning", "attractive", "elegant", "lovely"], antonyms: ["ugly", "unattractive", "hideous"], simple: "The sunset was beautiful.", compound: "The sunset was beautiful, and it made everyone feel calm.", complex: "Although the weather was terrible, the beautiful sunset still managed to brighten our mood." },
         "happy": { synonyms: ["joyful", "delighted", "cheerful", "pleased", "content"], antonyms: ["sad", "unhappy", "miserable"], simple: "She felt happy when she saw her friends.", compound: "She felt happy when she saw her friends, so she smiled.", complex: "Because he had worked hard, he was happy with his results." },
