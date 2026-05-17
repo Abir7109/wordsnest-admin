@@ -110,7 +110,7 @@ export default function App() {
       case "aiconfig":
         return <AIConfig onNotify={addNotification} onAddRequest={addRequest} />;
       case "notifications":
-        return <Notifications notifications={notifications} setNotifications={setNotifications} />;
+        return <Notifications notifications={notifications} setNotifications={setNotifications} users={users} onNotify={addNotification} />;
       case "analytics":
         return <Analytics requests={requests} />;
       default:

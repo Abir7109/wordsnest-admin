@@ -1,17 +1,84 @@
-import { Bell, CheckCircle2, AlertCircle, Trash2, Clock, Terminal } from "lucide-react";
+import { Bell, CheckCircle2, AlertCircle, Trash2, Clock, Terminal, Send, Users, X, Check } from "lucide-react";
 import { cn } from "@/src/lib/utils";
 import { Notification } from "../App";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { User, UserType } from "../types";
 
 interface NotificationsProps {
   notifications: Notification[];
   setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
+  users: User[];
+  onNotify: (message: string, type: 'info' | 'success' | 'error') => void;
 }
 
-export default function Notifications({ notifications, setNotifications }: NotificationsProps) {
+export default function Notifications({ notifications, setNotifications, users, onNotify }: NotificationsProps) {
+  const [showSendModal, setShowSendModal] = useState(false);
+  const [title, setTitle] = useState("");
+  const [message, setMessage] = useState("");
+  const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
+  const [sendToAll, setSendToAll] = useState(true);
+  const [sending, setSending] = useState(false);
+
   const handleClear = () => {
     setNotifications([]);
+  };
+
+  const handleSend = async () => {
+    if (!title.trim() || !message.trim()) {
+      onNotify("Please enter title and message", "error");
+      return;
+    }
+
+    setSending(true);
+    try {
+      const response = await fetch("/api/admin/send-notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.trim(),
+          message: message.trim(),
+          targetUsers: sendToAll ? null : selectedUsers,
+          sentBy: "Admin"
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        onNotify(`Notification sent to ${sendToAll ? "all users" : selectedUsers.length + " users"}`, "success");
+        setShowSendModal(false);
+        setTitle("");
+        setMessage("");
+        setSelectedUsers([]);
+        setSendToAll(true);
+        
+        // Refresh notifications
+        fetch("/api/admin/notifications")
+          .then(res => res.json())
+          .then(data => {
+            const adminNotifs = (data.notifications || []).map((n: any) => ({
+              id: n.id,
+              type: 'info' as const,
+              message: `${n.title}: ${n.message}`,
+              timestamp: new Date(n.createdAt)
+            }));
+            setNotifications(adminNotifs);
+          });
+      } else {
+        onNotify("Failed to send notification", "error");
+      }
+    } catch (e) {
+      onNotify("Error sending notification", "error");
+    }
+    setSending(false);
+  };
+
+  const toggleUser = (userId: string) => {
+    setSelectedUsers(prev => 
+      prev.includes(userId) 
+        ? prev.filter(id => id !== userId)
+        : [...prev, userId]
+    );
   };
 
   const getTimeAgo = (date: Date) => {
@@ -23,22 +90,159 @@ export default function Notifications({ notifications, setNotifications }: Notif
     return `${hours}h ago`;
   };
 
+  // Fetch sent notifications on mount
+  useEffect(() => {
+    fetch("/api/admin/notifications")
+      .then(res => res.json())
+      .then(data => {
+        const adminNotifs = (data.notifications || []).map((n: any) => ({
+          id: n.id,
+          type: 'info' as const,
+          message: `${n.title}: ${n.message}`,
+          timestamp: new Date(n.createdAt)
+        }));
+        setNotifications(prev => [...adminNotifs, ...prev.filter(p => !adminNotifs.find(a => a.id === p.id))]);
+      })
+      .catch(console.error);
+  }, []);
+
   return (
-    <div className="space-y-gutter relative max-w-4xl mx-auto">
+    <div className="space-y-gutter relative">
+      {/* Send Notification Modal */}
+      <AnimatePresence>
+        {showSendModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-md bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-surface-container border border-outline-variant rounded-2xl p-lg sm:p-xl max-w-lg w-full shadow-2xl mx-auto max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex justify-between items-center mb-lg">
+                <h3 className="text-xl font-bold text-on-surface">Send Notification</h3>
+                <button onClick={() => setShowSendModal(false)} className="p-2 hover:bg-surface-container-high rounded-lg">
+                  <X size={20} className="text-on-surface-variant" />
+                </button>
+              </div>
+
+              <div className="space-y-md">
+                <div>
+                  <label className="text-sm font-bold text-on-surface-variant mb-xs block">Title</label>
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="e.g., New Feature Available!"
+                    className="w-full bg-surface-container-low border border-outline-variant rounded-xl p-md text-on-surface focus:border-primary outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-bold text-on-surface-variant mb-xs block">Message</label>
+                  <textarea
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    placeholder="Enter your notification message..."
+                    rows={3}
+                    className="w-full bg-surface-container-low border border-outline-variant rounded-xl p-md text-on-surface focus:border-primary outline-none resize-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-bold text-on-surface-variant mb-sm block">Send To</label>
+                  <div className="flex gap-md mb-md">
+                    <button
+                      onClick={() => { setSendToAll(true); setSelectedUsers([]); }}
+                      className={cn(
+                        "flex-1 py-md px-lg rounded-xl font-bold border transition-all",
+                        sendToAll 
+                          ? "bg-primary text-on-primary border-primary" 
+                          : "bg-surface-container-low border-outline-variant text-on-surface-variant hover:border-primary"
+                      )}
+                    >
+                      <Send size={16} className="inline mr-sm" />
+                      All Users
+                    </button>
+                    <button
+                      onClick={() => setSendToAll(false)}
+                      className={cn(
+                        "flex-1 py-md px-lg rounded-xl font-bold border transition-all",
+                        !sendToAll 
+                          ? "bg-primary text-on-primary border-primary" 
+                          : "bg-surface-container-low border-outline-variant text-on-surface-variant hover:border-primary"
+                      )}
+                    >
+                      <Users size={16} className="inline mr-sm" />
+                      Specific Users
+                    </button>
+                  </div>
+
+                  {!sendToAll && (
+                    <div className="bg-surface-container-low border border-outline-variant rounded-xl p-md max-h-48 overflow-y-auto">
+                      <div className="flex flex-wrap gap-sm">
+                        {users.map(user => (
+                          <button
+                            key={user.id}
+                            onClick={() => toggleUser(user.id)}
+                            className={cn(
+                              "px-md py-sm rounded-full text-sm font-bold transition-all flex items-center gap-sm",
+                              selectedUsers.includes(user.id)
+                                ? "bg-primary text-on-primary"
+                                : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"
+                            )}
+                          >
+                            {selectedUsers.includes(user.id) && <Check size={14} />}
+                            {user.id}
+                          </button>
+                        ))}
+                        {users.length === 0 && (
+                          <p className="text-on-surface-variant text-sm">No users available</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleSend}
+                  disabled={sending || !title.trim() || !message.trim()}
+                  className="w-full bg-primary text-on-primary py-md rounded-xl font-bold hover:bg-primary-container hover:text-on-primary-container transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {sending ? "Sending..." : "Send Notification"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex flex-col sm:flex-row justify-between sm:items-end gap-md mb-xl pb-md border-b border-outline-variant/30">
         <div>
           <h2 className="font-display text-4xl font-bold text-on-surface mb-xs tracking-tight">Notification Center</h2>
-          <p className="text-on-surface-variant font-medium">Archival timeline of administrative and system triggers.</p>
+          <p className="text-on-surface-variant font-medium">Send and manage notifications to users.</p>
         </div>
-        {notifications.length > 0 && (
+        <div className="flex gap-md">
           <button 
-            onClick={handleClear}
-            className="text-sm font-bold text-on-surface-variant hover:text-error flex items-center gap-sm transition-colors group"
+            onClick={() => setShowSendModal(true)}
+            className="bg-primary text-on-primary px-lg py-[10px] rounded-xl font-bold flex items-center gap-sm hover:bg-primary-container hover:text-on-primary-container transition-all shadow-lg shadow-primary/10"
           >
-            <Trash2 size={16} className="group-hover:scale-110 transition-transform" />
-            Clear All
+            <Send size={18} />
+            Send Notification
           </button>
-        )}
+          {notifications.length > 0 && (
+            <button 
+              onClick={handleClear}
+              className="text-sm font-bold text-on-surface-variant hover:text-error flex items-center gap-sm transition-colors group px-lg py-[10px]"
+            >
+              <Trash2 size={16} className="group-hover:scale-110 transition-transform" />
+              Clear All
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="space-y-md">
@@ -73,12 +277,11 @@ export default function Notifications({ notifications, setNotifications }: Notif
                 </div>
                 <p className="text-on-surface-variant text-sm sm:text-base leading-relaxed font-medium break-words">{n.message}</p>
                 <div className="flex flex-wrap gap-md pt-sm opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                   <button className="text-[11px] sm:text-[12px] font-bold text-primary hover:underline whitespace-nowrap">Inspect Metadata</button>
                    <button 
-                    onClick={() => setNotifications(prev => prev.filter(notif => notif.id !== n.id))}
-                    className="text-[11px] sm:text-[12px] font-bold text-on-surface-variant hover:text-on-surface whitespace-nowrap"
+                     onClick={() => setNotifications(prev => prev.filter(notif => notif.id !== n.id))}
+                     className="text-[11px] sm:text-[12px] font-bold text-on-surface-variant hover:text-on-surface whitespace-nowrap"
                    >
-                    Dismiss
+                     Dismiss
                    </button>
                 </div>
               </div>
@@ -91,7 +294,8 @@ export default function Notifications({ notifications, setNotifications }: Notif
             <div className="inline-flex p-xl rounded-full bg-surface-container-high border border-outline-variant mb-lg shadow-inner">
               <Bell className="text-on-surface-variant" size={48} />
             </div>
-            <h3 className="font-display text-2xl font-bold text-on-surface mb-xs">Archives are silent.</h3>
+            <h3 className="font-display text-2xl font-bold text-on-surface mb-xs">No notifications yet.</h3>
+            <p className="text-on-surface-variant">Send a notification to get started.</p>
           </div>
         )}
       </div>
