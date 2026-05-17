@@ -772,7 +772,7 @@ app.get("/api/install-analytics", async (req, res) => {
       return res.json({
         totalInstalls: 0,
         activeUsers: 0,
-        likelyUninstalled: 0,
+        uninstalls: 0,
         recentInstalls: []
       });
     }
