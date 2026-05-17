@@ -754,9 +754,12 @@ app.post("/api/app-config", async (req, res) => {
 
 // Install Analytics - Get install stats from Firestore
 app.get("/api/install-analytics", async (req, res) => {
+  console.log("📊 /api/install-analytics called");
+  console.log("  firestore available:", !!firestore);
+  
   try {
     if (!firestore) {
-      // Fallback to in-memory data if Firestore not available
+      console.log("  ❌ Firestore not available");
       return res.json({
         totalInstalls: 0,
         activeUsers: 0,
@@ -770,12 +773,10 @@ app.get("/api/install-analytics", async (req, res) => {
     const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
 
     // Get total installs
+    console.log("  📥 Reading installs collection...");
     const installsSnap = await firestore.collection("installs").get();
     const totalInstalls = installsSnap.size;
-    console.log("📊 Install analytics - found installs:", totalInstalls);
-    installsSnap.docs.forEach(doc => {
-      console.log("  Install:", doc.id, doc.data());
-    });
+    console.log("  ✅ Found installs:", totalInstalls);
 
     // Get active users (last_active >= 7 days ago, status = active)
     const activeQuery = await firestore.collection("users")
@@ -783,12 +784,14 @@ app.get("/api/install-analytics", async (req, res) => {
       .where("status", "==", "active")
       .get();
     const activeUsers = activeQuery.size;
+    console.log("  ✅ Active users:", activeUsers);
 
     // Get likely uninstalled (last_active <= 30 days ago)
     const inactiveQuery = await firestore.collection("users")
       .where("last_active", "<=", thirtyDaysAgo)
       .get();
     const likelyUninstalled = inactiveQuery.size;
+    console.log("  ✅ Likely uninstalled:", likelyUninstalled);
 
     // Get recent installs (last 10)
     const recentInstalls = installsSnap.docs
@@ -798,7 +801,7 @@ app.get("/api/install-analytics", async (req, res) => {
         ...doc.data()
       }));
 
-    console.log("Install analytics:", { totalInstalls, activeUsers, likelyUninstalled });
+    console.log("  📊 Returning:", { totalInstalls, activeUsers, likelyUninstalled });
 
     res.json({
       totalInstalls,
@@ -807,8 +810,7 @@ app.get("/api/install-analytics", async (req, res) => {
       recentInstalls
     });
   } catch (e) {
-    console.log("Error getting install analytics:", e.message);
-    // Return empty stats instead of error
+    console.log("  ❌ Error:", e.message);
     res.json({
       totalInstalls: 0,
       activeUsers: 0,
