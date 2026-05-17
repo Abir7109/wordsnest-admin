@@ -51,9 +51,15 @@ initFirebase();
  * /api/analyze: The core linguistic analysis endpoint used by the Android app.
  * Uses Free Dictionary API + Groq for AI enhancement
  */
-app.post("/api/analyze", async (req: Request, res: Response) => {
-  const { word, userID, timestamp } = req.body;
-  
+// Analyze endpoint - supports both POST and GET
+app.post("/api/analyze", analyzeHandler);
+app.get("/api/analyze", analyzeHandler);
+
+async function analyzeHandler(req: Request, res: Response) {
+  const word = req.method === 'POST' ? req.body?.word : req.query?.word;
+  const userID = req.method === 'POST' ? req.body?.userID : req.query?.userID || 'anonymous';
+  const timestamp = req.method === 'POST' ? req.body?.timestamp : req.query?.timestamp;
+   
   if (!word) {
     return res.status(400).json({ error: "Word is required" });
   }
