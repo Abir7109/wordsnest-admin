@@ -767,62 +767,9 @@ app.get("/api/install-analytics-new", async (req, res) => {
   return res.json({ status: "new endpoint works", now: Date.now() });
 });
 
-app.get("/api/install-analytics", async (req, res) => {
-  try {
-    console.log("📊 /api/install-analytics called");
-    
-    if (!firestore) {
-      return res.json({ error: "Firestore not available", totalInstalls: 0, activeUsers: 0, uninstalls: 0, recentInstalls: [] });
-    }
-
-    const now = Date.now();
-    const oneDayAgo = now - (1 * 24 * 60 * 60 * 1000);
-    const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
-
-    // Get total installs
-    console.log("  📥 Reading installs collection...");
-    const installsSnap = await firestore.collection("installs").get();
-    const totalInstalls = installsSnap.size;
-    console.log("  ✅ Found installs:", totalInstalls);
-
-    // Get users and filter in memory
-    const usersSnap = await firestore.collection("users").get();
-    const users = usersSnap.docs.map(d => d.data());
-    
-    // Active users = users who sent heartbeat in last 24 hours
-    const activeUsers = users.filter(u => {
-      const lastActive = u.last_active || 0;
-      return lastActive >= oneDayAgo;
-    }).length;
-    console.log("  ✅ Active users (last 24h):", activeUsers);
-
-    // Uninstalls = users who haven't been active for 7+ days (they likely uninstalled)
-    const uninstalls = users.filter(u => {
-      const lastActive = u.last_active || 0;
-      return now - lastActive > sevenDaysAgo;
-    }).length;
-    console.log("  ✅ Uninstalls (no activity 7+ days):", uninstalls);
-
-    // Get recent installs (last 10)
-    const recentInstalls = installsSnap.docs
-      .slice(0, 10)
-      .map(doc => ({
-        userId: doc.id,
-        ...doc.data()
-      }));
-
-    console.log("  📊 Returning:", { totalInstalls, activeUsers, uninstalls });
-
-    res.json({
-      totalInstalls,
-      activeUsers,
-      uninstalls,
-      recentInstalls
-    });
-  } catch (e) {
-    console.log("  ❌ Error:", e.message);
-    res.status(500).json({ error: e.message });
-  }
+app.get("/api/install-analytics", (req, res) => {
+  // Hardcoded test - no async
+  res.json({ totalInstalls: 999, activeUsers: 1, uninstalls: 0, recentInstalls: [] });
 });
 
 // Debug endpoint - mirror of test-firestore for comparison
