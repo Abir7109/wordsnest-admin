@@ -763,25 +763,14 @@ app.get("/api/install-analytics-v2", async (req, res) => {
 });
 
 app.get("/api/install-analytics", async (req, res) => {
-  console.log("📊 /api/install-analytics called at", new Date().toISOString());
-  
-  // Immediate response to test
-  return res.json({ test: "immediate", firestore: !!firestore });
-  
-  console.log("  firestore available:", !!firestore);
-  
   try {
+    console.log("📊 /api/install-analytics called");
+    
     if (!firestore) {
-      console.log("  ❌ Firestore not available");
-      return res.json({
-        totalInstalls: 0,
-        activeUsers: 0,
-        uninstalls: 0,
-        recentInstalls: []
-      });
+      return res.json({ error: "Firestore not available", totalInstalls: 0, activeUsers: 0, uninstalls: 0, recentInstalls: [] });
     }
 
-const now = Date.now();
+    const now = Date.now();
     const oneDayAgo = now - (1 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
 
