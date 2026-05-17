@@ -736,16 +736,15 @@ app.post("/api/app-config", async (req, res) => {
   
   try {
     if (firestore) {
-      // Try to save to known document ID first
       await firestore.collection(APP_CONFIG_COLLECTION).doc("config").set(config, { merge: true });
-      console.log("App config saved to Firestore (doc: config)");
+      console.log("✅ App config saved to Firestore:", JSON.stringify(config));
       return res.json({ success: true, config });
     } else {
-      console.log("Firestore not available, config not saved");
+      console.log("❌ Firestore not available, config not saved");
       return res.status(503).json({ error: "Firestore not available" });
     }
   } catch (e) {
-    console.log("Error saving app config:", e.message);
+    console.log("❌ Error saving app config:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
