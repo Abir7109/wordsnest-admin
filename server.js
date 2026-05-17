@@ -768,6 +768,14 @@ app.get("/api/install-analytics", async (req, res) => {
       });
     }
 
+    // DEBUG: Return hardcoded test
+    return res.json({
+      totalInstalls: 999,
+      activeUsers: 1,
+      likelyUninstalled: 0,
+      recentInstalls: []
+    });
+
     const now = Date.now();
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
