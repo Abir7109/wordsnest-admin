@@ -328,6 +328,7 @@ Guidelines:
     }
 
     const result = {
+      _version: "v2-updated",
       word: word,
       phonetic: "",
       meaning: meaning,
@@ -353,10 +354,10 @@ Guidelines:
   }
 }
 
-// Debug endpoint to verify deployment
+// Debug endpoint to verify deployment - UPDATED 2024
 app.get("/api/debug", (req, res) => {
   res.json({ 
-    message: "Server is running updated code",
+    message: "Server is running UPDATED code v2",
     timestamp: new Date().toISOString(),
     apiKeyLength: GEMINI_API_KEY?.length,
     apiKeyPrefix: GEMINI_API_KEY?.substring(0, 5)
