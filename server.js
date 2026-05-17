@@ -770,6 +770,7 @@ app.get("/api/install-analytics-new", async (req, res) => {
 app.get("/api/install-analytics", async (req, res) => {
   try {
     const now = Date.now();
+    const thirtySecAgo = now - (30 * 1000);
     const oneHourAgo = now - (60 * 60 * 1000);
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
 
@@ -778,14 +779,21 @@ app.get("/api/install-analytics", async (req, res) => {
     
     const users = usersSnap.docs.map(d => d.data());
     
-    const activeUsers = users.filter(u => (u.last_active || 0) >= oneHourAgo).length;
+    const activeUsers = users.filter(u => (u.last_active || 0) >= thirtySecAgo).length;
     const uninstalls = users.filter(u => now - (u.last_active || 0) > sevenDaysAgo).length;
+
+    // Build lists for each category
+    const activeUsersList = users.filter(u => (u.last_active || 0) >= thirtySecAgo);
+    const uninstalledUsersList = users.filter(u => now - (u.last_active || 0) > sevenDaysAgo);
 
     res.json({
       totalInstalls: installsSnap.size,
       activeUsers,
       uninstalls,
-      recentInstalls: installsSnap.docs.slice(0, 10).map(d => ({ id: d.id, ...d.data() }))
+      recentInstalls: installsSnap.docs.slice(0, 10).map(d => ({ id: d.id, ...d.data() })),
+      activeUsersList: activeUsersList.map(u => ({ user_id: u.user_id || u.id, app_version: u.app_version, device_model: u.device_model, last_active: u.last_active, install_date: u.install_date })),
+      uninstalledUsersList: uninstalledUsersList.map(u => ({ user_id: u.user_id || u.id, app_version: u.app_version, device_model: u.device_model, last_active: u.last_active, install_date: u.install_date })),
+      allInstallsList: installsSnap.docs.map(d => ({ user_id: d.data().user_id, app_version: d.data().app_version, device_model: d.data().device_model, install_date: d.data().install_date }))
     });
   } catch (e) {
     res.json({ error: e.message });

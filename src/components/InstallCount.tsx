@@ -3,11 +3,22 @@ import { useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { cn } from "@/src/lib/utils";
 
+interface UserListItem {
+  user_id?: string;
+  app_version?: string;
+  device_model?: string;
+  last_active?: number;
+  install_date?: number;
+}
+
 interface InstallStats {
   totalInstalls: number;
   activeUsers: number;
   uninstalls: number;
   recentInstalls: any[];
+  activeUsersList?: UserListItem[];
+  uninstalledUsersList?: UserListItem[];
+  allInstallsList?: UserListItem[];
 }
 
 interface InstallCountProps {
@@ -23,6 +34,15 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
   });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalList, setModalList] = useState<UserListItem[]>([]);
+
+  const showList = (title: string, list: UserListItem[]) => {
+    setModalTitle(title);
+    setModalList(list);
+    setShowModal(true);
+  };
 
   const fetchStats = async () => {
     try {
@@ -116,7 +136,8 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-surface-container rounded-xl p-lg border border-outline-variant"
+          onClick={() => showList("All Installs", stats.allInstallsList || [])}
+          className="bg-surface-container rounded-xl p-lg border border-outline-variant cursor-pointer hover:border-primary transition-colors"
         >
           <div className="flex items-center gap-sm mb-md">
             <Users size={20} className="text-primary" />
@@ -134,7 +155,8 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="bg-surface-container rounded-xl p-lg border border-outline-variant"
+          onClick={() => showList("Active Users (Live)", stats.activeUsersList || [])}
+          className="bg-surface-container rounded-xl p-lg border border-outline-variant cursor-pointer hover:border-secondary transition-colors"
         >
           <div className="flex items-center gap-sm mb-md">
             <Activity size={20} className="text-secondary" />
@@ -143,25 +165,26 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
           <p className="text-4xl font-display font-bold text-secondary">{stats.activeUsers}</p>
           <div className="flex items-center gap-xs mt-sm text-xs text-on-surface-variant">
             <TrendingUp size={14} className="text-secondary" />
-            <span>Last 7 days</span>
+            <span>Live (30s)</span>
           </div>
         </motion.div>
 
-        {/* Likely Uninstalled */}
+        {/* Uninstalled */}
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
-          className="bg-surface-container rounded-xl p-lg border border-outline-variant"
+          onClick={() => showList("Uninstalled Users", stats.uninstalledUsersList || [])}
+          className="bg-surface-container rounded-xl p-lg border border-outline-variant cursor-pointer hover:border-error transition-colors"
         >
           <div className="flex items-center gap-sm mb-md">
             <UserX size={20} className="text-error" />
-            <span className="text-sm font-medium text-on-surface-variant">Likely Uninstalled</span>
+            <span className="text-sm font-medium text-on-surface-variant">Uninstalled</span>
           </div>
           <p className="text-4xl font-display font-bold text-error">{stats.uninstalls}</p>
           <div className="flex items-center gap-xs mt-sm text-xs text-on-surface-variant">
             <TrendingDown size={14} className="text-error" />
-            <span>Last 30 days</span>
+            <span>No activity 7+ days</span>
           </div>
         </motion.div>
 
@@ -253,6 +276,57 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
           <div className="p-xl text-center text-on-surface-variant">
             <Smartphone size={48} className="mx-auto mb-md opacity-30" />
             <p>No installs recorded yet</p>
+          </div>
+        )}
+
+        {/* Modal for user lists */}
+        {showModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowModal(false)}>
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-surface-container rounded-xl p-lg max-w-2xl w-full mx-lg max-h-[80vh] overflow-auto border border-outline-variant"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-lg">
+                <h3 className="text-xl font-display font-bold text-on-surface">{modalTitle}</h3>
+                <button onClick={() => setShowModal(false)} className="text-on-surface-variant hover:text-on-surface">
+                  ✕
+                </button>
+              </div>
+              {modalList.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-outline-variant">
+                        <th className="py-md px-lg text-left text-sm font-medium text-on-surface-variant">User ID</th>
+                        <th className="py-md px-lg text-left text-sm font-medium text-on-surface-variant">App Version</th>
+                        <th className="py-md px-lg text-left text-sm font-medium text-on-surface-variant">Device</th>
+                        <th className="py-md px-lg text-left text-sm font-medium text-on-surface-variant">Install Date</th>
+                        <th className="py-md px-lg text-left text-sm font-medium text-on-surface-variant">Last Active</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {modalList.map((item, idx) => (
+                        <tr key={idx} className="border-b border-outline-variant/50 hover:bg-surface-container-highest">
+                          <td className="py-md px-lg text-sm text-on-surface font-mono">{item.user_id || 'N/A'}</td>
+                          <td className="py-md px-lg text-sm text-on-surface">{item.app_version || 'N/A'}</td>
+                          <td className="py-md px-lg text-sm text-on-surface">{item.device_model || 'N/A'}</td>
+                          <td className="py-md px-lg text-sm text-on-surface">
+                            {item.install_date ? new Date(item.install_date).toLocaleDateString() : 'N/A'}
+                          </td>
+                          <td className="py-md px-lg text-sm text-on-surface">
+                            {item.last_active ? new Date(item.last_active).toLocaleString() : 'N/A'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-center text-on-surface-variant py-xl">No data available</p>
+              )}
+            </motion.div>
           </div>
         )}
       </div>
