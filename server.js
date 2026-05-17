@@ -14,10 +14,57 @@ app.use(express.json());
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
+const FCM_SERVICE_ACCOUNT = process.env.FCM_SERVICE_ACCOUNT ? JSON.parse(process.env.FCM_SERVICE_ACCOUNT) : null;
+
+// FCM token storage
+const fcmTokens = new Map(); // userId -> token
 
 console.log("=== SERVER STARTED ===");
 console.log("GEMINI_API_KEY loaded:", GEMINI_API_KEY ? "YES (" + GEMINI_API_KEY.length + " chars)" : "NO");
 console.log("GROQ_API_KEY loaded:", GROQ_API_KEY ? "YES (" + GROQ_API_KEY.length + " chars)" : "NO");
+console.log("FCM configured:", !!FCM_SERVICE_ACCOUNT);
+
+// Initialize Firebase Admin for FCM
+let firebaseAdmin = null;
+if (FCM_SERVICE_ACCOUNT) {
+  try {
+    const admin = await import('firebase-admin');
+    firebaseAdmin = admin.initializeApp({
+      credential: admin.credential.cert(FCM_SERVICE_ACCOUNT)
+    });
+    console.log("Firebase Admin initialized for Push Notifications");
+  } catch (e) {
+    console.log("Firebase Admin init failed:", e.message);
+  }
+}
+
+// Send push notification via FCM
+async function sendPushNotification(token, title, body) {
+  if (!firebaseAdmin || !token) return false;
+  
+  try {
+    const message = {
+      notification: { title, body },
+      token: token
+    };
+    await firebaseAdmin.messaging().send(message);
+    console.log("Push notification sent to:", token.substring(0, 20) + "...");
+    return true;
+  } catch (e) {
+    console.log("Push notification failed:", e.message);
+    return false;
+  }
+}
+
+// Register FCM token
+app.post("/api/register-fcm", (req, res) => {
+  const { userId, fcmToken } = req.body;
+  if (userId && fcmToken) {
+    fcmTokens.set(userId, fcmToken);
+    console.log("FCM token registered for:", userId);
+  }
+  res.json({ success: true });
+});
 
 // In-memory storage
 const requestLogs = [];
@@ -488,9 +535,29 @@ app.post("/api/admin/send-notification", (req, res) => {
   // Keep only last 100 notifications
   if (notifications.length > 100) notifications.pop();
   
-  console.log("Notification sent:", title, "to:", targetUsers || "all users");
+  // Send push notifications
+  const pushPromises = [];
+  if (targetUsers === null) {
+    // Send to all users with tokens
+    fcmTokens.forEach((token, userId) => {
+      pushPromises.push(sendPushNotification(token, title, message));
+    });
+  } else if (Array.isArray(targetUsers)) {
+    // Send to specific users
+    targetUsers.forEach(userId => {
+      const token = fcmTokens.get(userId);
+      if (token) {
+        pushPromises.push(sendPushNotification(token, title, message));
+      }
+    });
+  }
   
-  res.json({ success: true, notification: newNotif });
+  // Wait for push notifications to send
+  Promise.all(pushPromises).catch(e => console.log("Push send error:", e.message));
+  
+  console.log("Notification sent:", title, "to:", targetUsers || "all users", "push sent:", pushPromises.length);
+  
+  res.json({ success: true, notification: newNotif, pushSent: pushPromises.length });
 });
 
 // Admin: Get all notifications
