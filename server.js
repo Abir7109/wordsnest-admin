@@ -29,7 +29,8 @@ let messaging = null;
 
 async function initFirebase() {
   try {
-    const admin = await import('firebase-admin');
+    const firebaseAdmin = await import('firebase-admin');
+    const admin = firebaseAdmin.default || firebaseAdmin;
     console.log("Firebase admin exports:", Object.keys(admin));
     console.log("Has credential:", !!admin.credential);
     
