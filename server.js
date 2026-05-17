@@ -762,6 +762,11 @@ app.get("/api/install-analytics-v2", async (req, res) => {
   return res.json({ test: "v2 works", total: 999 });
 });
 
+app.get("/api/install-analytics-new", async (req, res) => {
+  // Simple test without any Firestore calls
+  return res.json({ status: "new endpoint works", now: Date.now() });
+});
+
 app.get("/api/install-analytics", async (req, res) => {
   try {
     console.log("📊 /api/install-analytics called");
