@@ -829,6 +829,27 @@ app.get("/api/debug-firebase", (req, res) => {
   });
 });
 
+// Debug - test Firestore connection
+app.get("/api/test-firestore", async (req, res) => {
+  if (!firestore) {
+    return res.json({ error: "Firestore not connected" });
+  }
+  
+  try {
+    const installsSnap = await firestore.collection("installs").get();
+    const usersSnap = await firestore.collection("users").get();
+    
+    res.json({
+      installsCount: installsSnap.size,
+      usersCount: usersSnap.size,
+      installs: installsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+      users: usersSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 // Register routes
 app.post("/api/analyze", analyzeHandler);
 app.get("/api/analyze", analyzeHandler);
