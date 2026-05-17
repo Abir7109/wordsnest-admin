@@ -97,6 +97,22 @@ app.delete("/api/admin/experiences/:id", async (req, res) => {
   }
 });
 
+// Admin: Delete ALL experiences
+app.delete("/api/admin/experiences", async (req, res) => {
+  try {
+    if (!firestore) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+    const snap = await firestore.collection("experiences").get();
+    const batch = firestore.batch();
+    snap.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    res.json({ message: "All experiences deleted" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
