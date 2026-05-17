@@ -773,7 +773,7 @@ app.get("/api/install-analytics", async (req, res) => {
       });
     }
 
-    const now = Date.now();
+const now = Date.now();
     const oneDayAgo = now - (1 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
 
@@ -783,41 +783,23 @@ app.get("/api/install-analytics", async (req, res) => {
     const totalInstalls = installsSnap.size;
     console.log("  ✅ Found installs:", totalInstalls);
 
-    // Get users and filter in memory (avoids Firestore index requirements)
+    // Get users and filter in memory
     const usersSnap = await firestore.collection("users").get();
     const users = usersSnap.docs.map(d => d.data());
     
-    // Check heartbeats collection
-    const heartbeatsSnap = await firestore.collection("heartbeats")
-      .orderBy("timestamp", "desc")
-      .limit(5)
-      .get();
-    
-    console.log("  📡 Heartbeats count:", heartbeatsSnap.size);
-    let latestHeartbeat = 0;
-    if (!heartbeatsSnap.empty) {
-      const hbData = heartbeatsSnap.docs[0].data();
-      latestHeartbeat = hbData.timestamp || 0;
-      console.log("  📡 Latest heartbeat timestamp:", latestHeartbeat);
-      console.log("  📡 Sample heartbeats:", heartbeatsSnap.docs.map(d => ({user_id: d.data().user_id, ts: d.data().timestamp})));
-    }
-    
-    // Active users = users who sent heartbeat in last 24 hours AND have recent install
-    // OR use all registered users as fallback
-    const oneHourAgo = now - (1 * 60 * 60 * 1000);
-    const recentActiveUsers = users.filter(u => {
+    // Active users = users who sent heartbeat in last 24 hours
+    const activeUsers = users.filter(u => {
       const lastActive = u.last_active || 0;
-      return lastActive >= oneHourAgo;
+      return lastActive >= oneDayAgo;
     }).length;
-    
-    // If we have recent active users, use that; otherwise count all users
-    const activeUsers = recentActiveUsers > 0 ? recentActiveUsers : users.length;
-    console.log("  ✅ Recent active (1h):", recentActiveUsers, ", Total registered:", users.length);
+    console.log("  ✅ Active users (last 24h):", activeUsers);
 
-    // Likely uninstalled = total installs - active users
-    // (installs without current activity = uninstalled/reinstalled)
-    const likelyUninstalled = Math.max(0, totalInstalls - activeUsers);
-    console.log("  ✅ Likely uninstalled:", likelyUninstalled);
+    // Uninstalls = users who haven't been active for 7+ days (they likely uninstalled)
+    const uninstalls = users.filter(u => {
+      const lastActive = u.last_active || 0;
+      return now - lastActive > sevenDaysAgo;
+    }).length;
+    console.log("  ✅ Uninstalls (no activity 7+ days):", uninstalls);
 
     // Get recent installs (last 10)
     const recentInstalls = installsSnap.docs
@@ -831,8 +813,8 @@ app.get("/api/install-analytics", async (req, res) => {
 
     res.json({
       totalInstalls,
-      registeredUsers: activeUsers,
-      likelyUninstalled,
+      activeUsers,
+      uninstalls,
       recentInstalls
     });
   } catch (e) {
