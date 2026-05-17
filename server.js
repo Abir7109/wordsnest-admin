@@ -753,6 +753,10 @@ app.post("/api/app-config", async (req, res) => {
 });
 
 // Install Analytics - Get install stats from Firestore
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", time: new Date().toISOString(), firestore: !!firestore });
+});
+
 app.get("/api/install-analytics-v2", async (req, res) => {
   console.log("📊 v2 called");
   return res.json({ test: "v2 works", total: 999 });
