@@ -25,7 +25,6 @@ console.log("GROQ_API_KEY loaded:", GROQ_API_KEY ? "YES (" + GROQ_API_KEY.length
 console.log("FCM configured:", !!FCM_SERVICE_ACCOUNT);
 
 // Initialize Firebase Admin for FCM
-let firebaseAdmin = null;
 let messaging = null;
 
 async function initFirebase() {
@@ -36,10 +35,11 @@ async function initFirebase() {
   
   try {
     const admin = await import('firebase-admin');
-    firebaseAdmin = admin.initializeApp({
-      credential: admin.credential.cert(FCM_SERVICE_ACCOUNT)
+    const serviceAccount = FCM_SERVICE_ACCOUNT;
+    const adminApp = admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
     });
-    messaging = firebaseAdmin.messaging();
+    messaging = adminApp.messaging();
     console.log("Firebase Admin initialized for Push Notifications");
   } catch (e) {
     console.log("Firebase Admin init failed:", e.message);
