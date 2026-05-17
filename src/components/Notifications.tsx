@@ -120,41 +120,41 @@ export default function Notifications({ notifications, setNotifications, users, 
             <motion.div
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
-              className="bg-surface-container border border-outline-variant rounded-2xl p-lg sm:p-xl max-w-lg w-full shadow-2xl mx-auto max-h-[90vh] overflow-y-auto"
+              className="bg-surface-container border border-outline-variant rounded-2xl p-xl w-[95%] max-w-2xl shadow-2xl mx-auto max-h-[90vh] overflow-y-auto"
             >
-              <div className="flex justify-between items-center mb-lg">
-                <h3 className="text-xl font-bold text-on-surface">Send Notification</h3>
-                <button onClick={() => setShowSendModal(false)} className="p-2 hover:bg-surface-container-high rounded-lg">
-                  <X size={20} className="text-on-surface-variant" />
+              <div className="flex justify-between items-center mb-xl">
+                <h3 className="text-2xl font-bold text-on-surface">Send Notification</h3>
+                <button onClick={() => setShowSendModal(false)} className="p-3 hover:bg-surface-container-high rounded-xl">
+                  <X size={24} className="text-on-surface-variant" />
                 </button>
               </div>
 
-              <div className="space-y-md">
+              <div className="space-y-lg">
                 <div>
-                  <label className="text-sm font-bold text-on-surface-variant mb-xs block">Title</label>
+                  <label className="text-base font-bold text-on-surface-variant mb-md block">Title</label>
                   <input
                     type="text"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     placeholder="e.g., New Feature Available!"
-                    className="w-full bg-surface-container-low border border-outline-variant rounded-xl p-md text-on-surface focus:border-primary outline-none"
+                    className="w-full bg-surface-container-low border-2 border-outline-variant rounded-xl p-lg text-on-surface text-lg focus:border-primary outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="text-sm font-bold text-on-surface-variant mb-xs block">Message</label>
+                  <label className="text-base font-bold text-on-surface-variant mb-md block">Message</label>
                   <textarea
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     placeholder="Enter your notification message..."
-                    rows={3}
-                    className="w-full bg-surface-container-low border border-outline-variant rounded-xl p-md text-on-surface focus:border-primary outline-none resize-none"
+                    rows={4}
+                    className="w-full bg-surface-container-low border-2 border-outline-variant rounded-xl p-lg text-on-surface text-lg focus:border-primary outline-none resize-none"
                   />
                 </div>
 
                 <div>
-                  <label className="text-sm font-bold text-on-surface-variant mb-sm block">Send To</label>
-                  <div className="flex gap-md mb-md">
+                  <label className="text-base font-bold text-on-surface-variant mb-md block">Send To</label>
+                  <div className="flex gap-lg mb-lg">
                     <button
                       onClick={() => { setSendToAll(true); setSelectedUsers([]); }}
                       className={cn(
@@ -164,43 +164,43 @@ export default function Notifications({ notifications, setNotifications, users, 
                           : "bg-surface-container-low border-outline-variant text-on-surface-variant hover:border-primary"
                       )}
                     >
-                      <Send size={16} className="inline mr-sm" />
+                      <Send size={20} className="inline mr-md" />
                       All Users
                     </button>
                     <button
                       onClick={() => setSendToAll(false)}
                       className={cn(
-                        "flex-1 py-md px-lg rounded-xl font-bold border transition-all",
+                        "flex-1 py-lg px-xl rounded-xl font-bold border-2 transition-all text-lg",
                         !sendToAll 
                           ? "bg-primary text-on-primary border-primary" 
                           : "bg-surface-container-low border-outline-variant text-on-surface-variant hover:border-primary"
                       )}
                     >
-                      <Users size={16} className="inline mr-sm" />
+                      <Users size={20} className="inline mr-md" />
                       Specific Users
                     </button>
                   </div>
 
                   {!sendToAll && (
-                    <div className="bg-surface-container-low border border-outline-variant rounded-xl p-md max-h-48 overflow-y-auto">
-                      <div className="flex flex-wrap gap-sm">
+                    <div className="bg-surface-container-low border-2 border-outline-variant rounded-xl p-lg max-h-56 overflow-y-auto">
+                      <div className="flex flex-wrap gap-md">
                         {users.map(user => (
                           <button
                             key={user.id}
                             onClick={() => toggleUser(user.id)}
                             className={cn(
-                              "px-md py-sm rounded-full text-sm font-bold transition-all flex items-center gap-sm",
+                              "px-lg py-md rounded-full text-base font-bold transition-all flex items-center gap-md",
                               selectedUsers.includes(user.id)
                                 ? "bg-primary text-on-primary"
                                 : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"
                             )}
                           >
-                            {selectedUsers.includes(user.id) && <Check size={14} />}
+                            {selectedUsers.includes(user.id) && <Check size={18} />}
                             {user.id}
                           </button>
                         ))}
                         {users.length === 0 && (
-                          <p className="text-on-surface-variant text-sm">No users available</p>
+                          <p className="text-on-surface-variant text-lg">No users available</p>
                         )}
                       </div>
                     </div>
@@ -210,7 +210,7 @@ export default function Notifications({ notifications, setNotifications, users, 
                 <button
                   onClick={handleSend}
                   disabled={sending || !title.trim() || !message.trim()}
-                  className="w-full bg-primary text-on-primary py-md rounded-xl font-bold hover:bg-primary-container hover:text-on-primary-container transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-primary text-on-primary py-lg rounded-xl font-bold text-xl hover:bg-primary-container hover:text-on-primary-container transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-lg"
                 >
                   {sending ? "Sending..." : "Send Notification"}
                 </button>
