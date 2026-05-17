@@ -347,6 +347,9 @@ Guidelines:
                 complex = aiData.complex || "";
                 break; // Success, exit loop
               }
+            } else {
+              const groqErrText = await groqResponse.text();
+              console.log("Groq error response:", groqErrText.substring(0, 200));
             }
           } catch (groqErr) {
             console.log("Groq failed:", groqErr.message);
