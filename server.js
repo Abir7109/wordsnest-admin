@@ -22,19 +22,24 @@ const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
 
 // Firebase service account - try multiple sources
 let serviceAccount = null;
+console.log("FCM_SERVICE_ACCOUNT env var exists:", !!process.env.FCM_SERVICE_ACCOUNT);
+console.log("FCM_SERVICE_ACCOUNT starts with:", process.env.FCM_SERVICE_ACCOUNT?.substring(0, 50));
 
 // Source 1: Environment variable
 if (process.env.FCM_SERVICE_ACCOUNT) {
   try {
     // Handle escaped newlines in the JSON string
-    let fcmeAccount = process.env.FCM_SERVICE_ACCOUNT;
-    // Replace escaped newlines with actual newlines
-    fcmeAccount = fcmeAccount.replace(/\\n/g, '\n');
-    serviceAccount = JSON.parse(fcmeAccount);
-    console.log("Loaded Firebase config from environment variable");
+    let fcmAccount = process.env.FCM_SERVICE_ACCOUNT;
+    // Try multiple newline replacement strategies
+    fcmAccount = fcmAccount.replace(/\\n/g, '\n'); // escaped \n
+    fcmAccount = fcmAccount.replace(/\\\n/g, '\n'); // backslash followed by actual newline
+    
+    serviceAccount = JSON.parse(fcmAccount);
+    console.log("✅ Loaded Firebase config from environment variable");
     console.log("Project ID:", serviceAccount.project_id);
+    console.log("Client email:", serviceAccount.client_email);
   } catch (e) {
-    console.log("Failed to parse FCM_SERVICE_ACCOUNT env var:", e.message);
+    console.log("❌ Failed to parse FCM_SERVICE_ACCOUNT:", e.message);
   }
 }
 
