@@ -11,7 +11,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const GEMINI_API_KEY = "AIzaSyDR34t-jQtydqffemwigfx0mexjYcRvdKM";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDR34t-jQtydqffemwigfx0mexjYcRvdKM";
+
+console.log("=== SERVER STARTED ===");
+console.log("GEMINI_API_KEY loaded:", GEMINI_API_KEY ? "YES (" + GEMINI_API_KEY.length + " chars)" : "NO");
 
 // In-memory storage
 const requestLogs = [];
