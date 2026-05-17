@@ -49,12 +49,8 @@ initFirebase();
 
 /**
  * /api/analyze: The core linguistic analysis endpoint used by the Android app.
- * Uses Free Dictionary API + Groq for AI enhancement
+ * Uses Free Dictionary API + Gemini AI for enhancement
  */
-// Analyze endpoint - supports both POST and GET
-app.post("/api/analyze", analyzeHandler);
-app.get("/api/analyze", analyzeHandler);
-
 async function analyzeHandler(req: Request, res: Response) {
   const word = req.method === 'POST' ? req.body?.word : req.query?.word;
   const userID = req.method === 'POST' ? req.body?.userID : req.query?.userID || 'anonymous';
@@ -121,21 +117,13 @@ async function analyzeHandler(req: Request, res: Response) {
 
     // 3. If no synonyms/antonyms/sentences, use Gemini AI to enhance
     const needsAI = synonyms.length === 0 || antonyms.length === 0 || !simple;
-    if (needsAI) {
+    if (needsAI && ai) {
       console.log("Using Gemini AI to enhance:", word);
       try {
         const response = await ai.models.generateContent({
           model: "gemini-2.0-flash",
-          contents: `For the word "${word}", provide:
-1. 5 synonyms
-2. 3 antonyms  
-3. 1 simple example sentence
-
-Return ONLY JSON like:
-{"synonyms":["a","b","c"],"antonyms":["x","y"],"simple":"example"}`,
-          config: {
-            responseMimeType: "application/json",
-          },
+          contents: `For the word "${word}", provide: 5 synonyms, 3 antonyms, 1 example. Return JSON with keys: synonyms, antonyms, simple.`,
+          config: { responseMimeType: "application/json" }
         });
         
         const text = response.response.text();
@@ -200,6 +188,10 @@ Return ONLY JSON like:
     res.status(500).json({ error: "Failed to analyze: " + error.message });
   }
 });
+
+// Register routes after function definition
+app.post("/api/analyze", analyzeHandler);
+app.get("/api/analyze", analyzeHandler);
 
 // Simple Bangla dictionary
 function getBanglaMeaning(word: string): string {
