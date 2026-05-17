@@ -319,6 +319,35 @@ Guidelines:
   }
 }
 
+// Test AI endpoint
+app.get("/api/test-ai", async (req, res) => {
+  const word = req.query?.word || "beautiful";
+  console.log("=== TEST AI ENDPOINT ===");
+  console.log("API Key:", GEMINI_API_KEY?.substring(0, 10) + "...");
+  
+  try {
+    const prompt = `For the word "${word}", return JSON with 5 synonyms and 3 antonyms: {"synonyms":["a"],"antonyms":["b"]}`;
+    
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      })
+    });
+    
+    console.log("Test AI response status:", response.status);
+    const data = await response.json();
+    console.log("Test AI response:", JSON.stringify(data).substring(0, 500));
+    
+    res.json({ status: response.status, data: data });
+  } catch (e) {
+    console.log("Test AI error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get logs endpoint with users data
 app.get("/api/get-logs", (req, res) => {
   const usersList = getUsersData();
