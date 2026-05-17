@@ -13,6 +13,7 @@ import AIConfig from "@/src/components/AIConfig";
 import AppControl from "@/src/components/AppControl";
 import Notifications from "@/src/components/Notifications";
 import Analytics from "@/src/components/Analytics";
+import InstallCount from "@/src/components/InstallCount";
 import Login from "@/src/components/Login";
 import { AnimatePresence, motion } from "motion/react";
 import { User, RequestLog, UserType } from "./types";
@@ -114,6 +115,8 @@ export default function App() {
         return <AppControl onNotify={addNotification} />;
       case "notifications":
         return <Notifications notifications={notifications} setNotifications={setNotifications} users={users} onNotify={addNotification} />;
+      case "installcount":
+        return <InstallCount onNotify={addNotification} />;
       case "analytics":
         return <Analytics requests={requests} />;
       default:
@@ -129,6 +132,7 @@ export default function App() {
       case "aiconfig": return "AI Configuration";
       case "appcontrol": return "App Control";
       case "notifications": return "Notification Center";
+      case "installcount": return "Install Count";
       case "analytics": return "Platform Analytics";
       default: return "Words Nest Admin";
     }
