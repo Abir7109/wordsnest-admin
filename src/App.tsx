@@ -56,12 +56,12 @@ export default function App() {
           // Update users
           if (data.users) {
             const newUsers = data.users.map((u: any) => ({
-              id: u.guestId,
-              name: u.guestId,
-              email: `Active: ${u.status === 'active' ? 'Yes' : 'No'}`,
-              type: u.status === 'active' ? 'Active' : 'Inactive',
-              joinedAt: new Date(u.firstSeen).toLocaleDateString(),
-              searches: u.searchCount || 0
+              id: u.guestId || u.id || 'unknown',
+              type: u.status === 'active' ? UserType.REGISTERED : UserType.GUEST,
+              identity: u.guestId || 'anonymous',
+              words: u.searchCount || 0,
+              lastActive: u.status === 'active' ? 'Active now' : new Date(u.lastActive).toLocaleDateString(),
+              joinDate: new Date(u.firstSeen).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
             } as User));
             setUsers(prev => JSON.stringify(prev) !== JSON.stringify(newUsers) ? newUsers : prev);
           }

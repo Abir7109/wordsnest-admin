@@ -12,9 +12,11 @@ app.use(cors());
 app.use(express.json());
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDR34t-jQtydqffemwigfx0mexjYcRvdKM";
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "gsk_WpRq8QhSYCkRwkKwyN8vWGdyb3FYtYfXQpVHbVZFzK5sLrTj";
 
 console.log("=== SERVER STARTED ===");
 console.log("GEMINI_API_KEY loaded:", GEMINI_API_KEY ? "YES (" + GEMINI_API_KEY.length + " chars)" : "NO");
+console.log("GROQ_API_KEY loaded:", GROQ_API_KEY ? "YES (" + GROQ_API_KEY.length + " chars)" : "NO");
 
 // In-memory storage
 const requestLogs = [];
@@ -303,6 +305,50 @@ Guidelines:
       } else {
         const errText = await response.text();
         console.log("Gemini error response:", errText);
+        
+        // Try Groq as fallback
+        if (GROQ_API_KEY && GROQ_API_KEY.length > 10) {
+          console.log("Trying Groq as fallback...");
+          try {
+            const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+              method: "POST",
+              headers: { 
+                "Authorization": "Bearer " + GROQ_API_KEY,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                model: "llama-3.1-8b-instant",
+                messages: [{ 
+                  role: "user", 
+                  content: `For the word "${word}", provide 5 synonyms, 3 antonyms, 1 simple sentence, 1 compound sentence, 1 complex sentence. Return ONLY valid JSON: {"synonyms":["w1","w2","w3","w4","w5"],"antonyms":["a1","a2","a3"],"simple":"sentence","compound":"sentence","complex":"sentence"}`
+                }],
+                temperature: 0.7,
+                response_format: { type: "json_object" }
+              })
+            });
+            
+            console.log("Groq response status:", groqResponse.status);
+            
+            if (groqResponse.ok) {
+              const groqData = await groqResponse.json();
+              const groqText = groqData.choices?.[0]?.message?.content || "";
+              console.log("Groq response:", groqText.substring(0, 200));
+              
+              const match = groqText.match(/\{[\s\S]*\}/);
+              if (match) {
+                const aiData = JSON.parse(match[0]);
+                console.log("Groq parsed data:", aiData);
+                synonyms = aiData.synonyms?.slice(0, 5) || [];
+                antonyms = aiData.antonyms?.slice(0, 3) || [];
+                simple = aiData.simple || "";
+                compound = aiData.compound || "";
+                complex = aiData.complex || "";
+              }
+            }
+          } catch (groqErr) {
+            console.log("Groq failed:", groqErr.message);
+          }
+        }
       }
     } else {
       console.log("Skipping AI - no valid API key");
