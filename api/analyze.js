@@ -2,6 +2,23 @@ import { GoogleGenAI } from "@google/genai";
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
+// Groq API Keys from environment variables
+const GROQ_API_KEYS = [
+  process.env.GROQ_API_KEY_1,
+  process.env.GROQ_API_KEY_2,
+  process.env.GROQ_API_KEY_3,
+  process.env.GROQ_API_KEY_4,
+  process.env.GROQ_API_KEY_5,
+  process.env.GROQ_API_KEY_6
+].filter(Boolean);
+
+let keyIndex = 0;
+function getNextKey() {
+  const key = GROQ_API_KEYS[keyIndex];
+  keyIndex = (keyIndex + 1) % GROQ_API_KEYS.length;
+  return key;
+}
+
 // Initialize Firebase Admin
 let db = null;
 try {
@@ -20,6 +37,63 @@ try {
   }
 } catch (e) {
   console.log("Firebase Admin not available:", e.message);
+}
+
+async function enhanceWithAI(word, meaning) {
+  if (GROQ_API_KEYS.length === 0) {
+    return null;
+  }
+  try {
+    const apiKey = getNextKey();
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        messages: [{
+          role: "user",
+          content: `Generate for the word "${word}": 
+Return ONLY a JSON object with these exact fields (no extra text):
+{
+  "synonyms": ["word1", "word2", "word3", "word4", "word5"],
+  "antonyms": ["word1", "word2", "word3"],
+  "simpleSentence": "A simple example sentence using ${word}",
+  "compoundSentence": "A compound sentence using ${word}",
+  "complexSentence": "A complex sentence using ${word}"
+}`
+        }],
+        temperature: 0.7,
+        max_tokens: 200
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error("Groq API failed");
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "";
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch (e) {
+    console.log("AI enhancement failed:", e.message);
+  }
+  return null;
+}
+
+const banglaDict = {
+  "hello": "নমস্কার", "world": "পৃথিবী", "love": "ভালোবাসা", "friend": "বন্ধু",
+  "good": "ভালো", "bad": "খারাপ", "happy": "খুশি", "beautiful": "সুন্দর",
+  "time": "সময়", "water": "পানি", "food": "খাবার", "day": "দিন", "night": "রাত"
+};
+
+function getBanglaMeaning(word) {
+  return banglaDict[word.toLowerCase()] || "অর্থ অনুপলব্ধ";
 }
 
 export default async function handler(request, response) {
