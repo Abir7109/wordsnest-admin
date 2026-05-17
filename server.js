@@ -819,10 +819,12 @@ const now = Date.now();
     });
   } catch (e) {
     console.log("  ❌ Error:", e.message);
-    res.json({
+    console.log("  ❌ Stack:", e.stack);
+    res.status(500).json({
+      error: e.message,
       totalInstalls: 0,
       activeUsers: 0,
-      likelyUninstalled: 0,
+      uninstalls: 0,
       recentInstalls: []
     });
   }
