@@ -787,27 +787,27 @@ app.get("/api/install-analytics", async (req, res) => {
     const usersSnap = await firestore.collection("users").get();
     const users = usersSnap.docs.map(d => d.data());
     
-    // Get latest heartbeat timestamp from heartbeats collection
+    // Check heartbeats collection
     const heartbeatsSnap = await firestore.collection("heartbeats")
       .orderBy("timestamp", "desc")
-      .limit(1)
+      .limit(5)
       .get();
     
+    console.log("  📡 Heartbeats count:", heartbeatsSnap.size);
     let latestHeartbeat = 0;
     if (!heartbeatsSnap.empty) {
-      latestHeartbeat = heartbeatsSnap.docs[0].data().timestamp;
-      console.log("  📡 Latest heartbeat:", latestHeartbeat);
+      const hbData = heartbeatsSnap.docs[0].data();
+      latestHeartbeat = hbData.timestamp || 0;
+      console.log("  📡 Latest heartbeat timestamp:", latestHeartbeat);
+      console.log("  📡 Sample heartbeats:", heartbeatsSnap.docs.map(d => ({user_id: d.data().user_id, ts: d.data().timestamp})));
     }
     
     // Active users = users with last_active within 24h of latest heartbeat
-    // OR users with last_active in last 24h (fresh installs)
     const activeUsers = users.filter(u => {
       const lastActive = u.last_active || 0;
-      // If we have a heartbeat, check if user is within 24h of it
       if (latestHeartbeat > 0 && lastActive > 0) {
         return Math.abs(latestHeartbeat - lastActive) <= oneDayAgo;
       }
-      // Otherwise just check last 24h
       return lastActive >= oneDayAgo;
     }).length;
     console.log("  ✅ Active users:", activeUsers);
