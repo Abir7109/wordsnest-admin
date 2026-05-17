@@ -243,6 +243,8 @@ async function generateHandler(req, res) {
     let synonyms = [], antonyms = [], simple = "", compound = "", complex = "";
     
     if (GEMINI_API_KEY && GEMINI_API_KEY.length > 10) {
+      console.log("GEMINI_API_KEY is valid, calling AI...");
+      
       const prompt = `You are an experienced IELTS vocabulary teacher. For the word "${word}", generate:
 
 1. 5 high-quality synonyms (common IELTS words)
@@ -327,7 +329,7 @@ Guidelines:
     console.log("Generate endpoint error:", error.message);
     const userIdFromRequest = req.body?.user_id || req.query?.user_id || "unknown";
     logRequest(word, userIdFromRequest, false);
-    res.status(500).json({ error: "Failed to generate: " + error.message });
+    res.status(500).json({ error: "Failed to generate: " + error.message, debug: { synonyms, antonyms, simple, GEMINI_API_KEY: !!GEMINI_API_KEY } });
   }
 }
 
