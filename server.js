@@ -816,12 +816,7 @@ app.get("/api/install-analytics", async (req, res) => {
     });
   } catch (e) {
     console.log("  ❌ Error:", e.message);
-    res.json({
-      totalInstalls: 0,
-      activeUsers: 0,
-      uninstalls: 0,
-      recentInstalls: []
-    });
+    res.status(500).json({ error: e.message });
   }
 });
 
