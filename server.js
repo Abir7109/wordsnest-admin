@@ -97,7 +97,7 @@ app.delete("/api/admin/experiences/:id", async (req, res) => {
   }
 });
 
-// Admin: Delete ALL experiences
+// Admin: Delete ALL experiences (also works with GET for testing)
 app.delete("/api/admin/experiences", async (req, res) => {
   try {
     if (!firestore) {
@@ -108,6 +108,21 @@ app.delete("/api/admin/experiences", async (req, res) => {
     snap.docs.forEach(doc => batch.delete(doc.ref));
     await batch.commit();
     res.json({ message: "All experiences deleted" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/admin/experiences/clear", async (req, res) => {
+  try {
+    if (!firestore) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+    const snap = await firestore.collection("experiences").get();
+    const batch = firestore.batch();
+    snap.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    res.json({ message: "All experiences cleared" });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
