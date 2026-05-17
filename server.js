@@ -16,6 +16,75 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// User Experiences API
+app.post("/api/experiences", async (req, res) => {
+  try {
+    if (!firestore) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+    const { name, experience, rating, device } = req.body;
+    if (!experience) {
+      return res.status(400).json({ error: "Experience text is required" });
+    }
+    const doc = await firestore.collection("experiences").add({
+      name: name || "Anonymous",
+      experience,
+      rating: rating || 5,
+      device: device || "",
+      createdAt: Date.now(),
+      approved: false
+    });
+    res.json({ id: doc.id, message: "Experience submitted!" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/experiences", async (req, res) => {
+  try {
+    if (!firestore) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+    const snap = await firestore.collection("experiences")
+      .where("approved", "==", true)
+      .orderBy("createdAt", "desc")
+      .limit(20)
+      .get();
+    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin: Get all experiences (including unapproved)
+app.get("/api/admin/experiences", async (req, res) => {
+  try {
+    if (!firestore) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+    const snap = await firestore.collection("experiences")
+      .orderBy("createdAt", "desc")
+      .get();
+    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin: Approve/Reject experience
+app.patch("/api/admin/experiences/:id", async (req, res) => {
+  try {
+    if (!firestore) {
+      return res.status(503).json({ error: "Database not available" });
+    }
+    const { approved } = req.body;
+    await firestore.collection("experiences").doc(req.params.id).update({ approved });
+    res.json({ message: "Updated" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
