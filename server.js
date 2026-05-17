@@ -734,10 +734,13 @@ app.post("/api/app-config", async (req, res) => {
     return res.status(400).json({ error: "Config required" });
   }
   
+  console.log("📝 Saving config to Firestore:", JSON.stringify(config));
+  
   try {
     if (firestore) {
-      await firestore.collection(APP_CONFIG_COLLECTION).doc("config").set(config, { merge: true });
-      console.log("✅ App config saved to Firestore:", JSON.stringify(config));
+      const docRef = firestore.collection(APP_CONFIG_COLLECTION).doc("config");
+      await docRef.set(config, { merge: true });
+      console.log("✅ App config SAVED to Firestore - under_maintenance:", config.under_maintenance);
       return res.json({ success: true, config });
     } else {
       console.log("❌ Firestore not available, config not saved");
