@@ -772,6 +772,10 @@ app.get("/api/install-analytics", async (req, res) => {
     // Get total installs
     const installsSnap = await firestore.collection("installs").get();
     const totalInstalls = installsSnap.size;
+    console.log("📊 Install analytics - found installs:", totalInstalls);
+    installsSnap.docs.forEach(doc => {
+      console.log("  Install:", doc.id, doc.data());
+    });
 
     // Get active users (last_active >= 7 days ago, status = active)
     const activeQuery = await firestore.collection("users")
