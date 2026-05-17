@@ -6,7 +6,7 @@ import { cn } from "@/src/lib/utils";
 interface InstallStats {
   totalInstalls: number;
   activeUsers: number;
-  likelyUninstalled: number;
+  uninstalls: number;
   recentInstalls: any[];
 }
 
@@ -18,7 +18,7 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
   const [stats, setStats] = useState<InstallStats>({
     totalInstalls: 0,
     activeUsers: 0,
-    likelyUninstalled: 0,
+    uninstalls: 0,
     recentInstalls: []
   });
   const [loading, setLoading] = useState(true);
@@ -44,7 +44,7 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
         setStats({
           totalInstalls: 0,
           activeUsers: 0,
-          likelyUninstalled: 0,
+          uninstalls: 0,
           recentInstalls: []
         });
       } else {
@@ -58,7 +58,7 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
       setStats({
         totalInstalls: 0,
         activeUsers: 0,
-        likelyUninstalled: 0,
+        uninstalls: 0,
         recentInstalls: []
       });
     } finally {
@@ -76,7 +76,7 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
   }, []);
 
   const uninstallRate = stats.totalInstalls > 0 
-    ? Math.round((stats.likelyUninstalled / stats.totalInstalls) * 100) 
+    ? Math.round((stats.uninstalls / stats.totalInstalls) * 100) 
     : 0;
 
   if (loading) {
@@ -158,7 +158,7 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
             <UserX size={20} className="text-error" />
             <span className="text-sm font-medium text-on-surface-variant">Likely Uninstalled</span>
           </div>
-          <p className="text-4xl font-display font-bold text-error">{stats.likelyUninstalled}</p>
+          <p className="text-4xl font-display font-bold text-error">{stats.uninstalls}</p>
           <div className="flex items-center gap-xs mt-sm text-xs text-on-surface-variant">
             <TrendingDown size={14} className="text-error" />
             <span>Last 30 days</span>
