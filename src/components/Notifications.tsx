@@ -19,6 +19,7 @@ export default function Notifications({ notifications, setNotifications, users, 
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [sendToAll, setSendToAll] = useState(true);
   const [sending, setSending] = useState(false);
+  const [sentHistory, setSentHistory] = useState<{id: string, title: string, status: 'success' | 'error', time: Date}[]>([]);
 
   const handleClear = () => {
     setNotifications([]);
@@ -46,6 +47,15 @@ export default function Notifications({ notifications, setNotifications, users, 
       if (response.ok) {
         const data = await response.json();
         onNotify(`Notification sent to ${sendToAll ? "all users" : selectedUsers.length + " users"}`, "success");
+        
+        // Add to history
+        setSentHistory(prev => [{
+          id: Date.now().toString(),
+          title: title.trim(),
+          status: 'success',
+          time: new Date()
+        }, ...prev.slice(0, 9)]);
+        
         setShowSendModal(false);
         setTitle("");
         setMessage("");
@@ -65,6 +75,12 @@ export default function Notifications({ notifications, setNotifications, users, 
             setNotifications(adminNotifs);
           });
       } else {
+        setSentHistory(prev => [{
+          id: Date.now().toString(),
+          title: title.trim(),
+          status: 'error',
+          time: new Date()
+        }, ...prev.slice(0, 9)]);
         onNotify("Failed to send notification", "error");
       }
     } catch (e) {
@@ -244,6 +260,25 @@ export default function Notifications({ notifications, setNotifications, users, 
           )}
         </div>
       </div>
+
+      {/* Sent History */}
+      {sentHistory.length > 0 && (
+        <div className="bg-surface-container border border-outline-variant rounded-2xl p-lg">
+          <h3 className="text-lg font-bold text-on-surface mb-md">Recent Send Results</h3>
+          <div className="flex flex-wrap gap-md">
+            {sentHistory.map(item => (
+              <div key={item.id} className={cn(
+                "flex items-center gap-md px-lg py-md rounded-xl",
+                item.status === "success" ? "bg-secondary-container/40" : "bg-error-container/40"
+              )}>
+                {item.status === 'success' ? <CheckCircle2 size={18} className="text-secondary" /> : <AlertCircle size={18} className="text-error" />}
+                <span className="text-sm font-bold text-on-surface">{item.title}</span>
+                <span className="text-xs text-on-surface-variant">{item.time.toLocaleTimeString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-md">
         <AnimatePresence initial={false}>
