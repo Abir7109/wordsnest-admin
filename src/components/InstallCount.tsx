@@ -27,17 +27,20 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
   const fetchStats = async () => {
     try {
       setRefreshing(true);
+      console.log('Fetching install analytics...');
       const response = await fetch('/api/install-analytics');
+      console.log('Response status:', response.status);
       
       if (!response.ok) {
         throw new Error('Failed to fetch');
       }
       
       const data = await response.json();
+      console.log('Received data:', data);
       
       // Handle case where firestore is not available
       if (data.error) {
-        console.log('Install analytics not available:', data.error);
+        console.log('Install analytics error:', data.error);
         setStats({
           totalInstalls: 0,
           activeUsers: 0,
@@ -45,6 +48,7 @@ export default function InstallCount({ onNotify }: InstallCountProps) {
           recentInstalls: []
         });
       } else {
+        console.log('Setting stats:', data);
         setStats(data);
       }
       onNotify('Stats refreshed', 'success');
