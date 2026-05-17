@@ -9,21 +9,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Initialize Gemini AI only if API key is available
-let ai: GoogleGenAI | null = null;
-if (process.env.GEMINI_API_KEY) {
-  ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
+// Initialize Gemini AI
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY || "AIzaSyDR34t-jQtydqffemwigfx0mexjYcRvdKM",
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
     }
-  });
-  console.log("Gemini AI initialized");
-} else {
-  console.log("Gemini API key not set - using Free Dictionary API only");
-}
+  }
+});
+console.log("Gemini AI initialized");
 
 // --- Firebase Admin Initialization ---
 let adminDb: any = null;
@@ -81,55 +76,89 @@ app.post("/api/analyze", async (req: Request, res: Response) => {
     const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
     const apiRes = await fetch(url);
     
-    if (!apiRes.ok) {
-      throw new Error("Word not found in dictionary");
-    }
-    
-    const data = await apiRes.json();
-    const entry = data[0];
-    const meanings = entry.meanings || [];
-    
-    const phonetic = entry.phonetic || (entry.phonetics?.[0]?.text) || "";
-    const english = meanings[0]?.definitions?.[0]?.definition || "No definition available";
-    
-    const partsOfSpeech = meanings.slice(0, 3).map((m: any) => ({
-      type: m.partOfSpeech || "Unknown",
-      definition: m.definitions?.[0]?.definition || ""
-    }));
-    
-    // Get synonyms/antonyms from dictionary
+    let phonetic = "";
+    let english = "";
+    let partsOfSpeech: any[] = [];
     let synonyms: string[] = [];
     let antonyms: string[] = [];
-    for (const m of meanings) {
-      synonyms = [...synonyms, ...(m.synonyms || []).slice(0, 3)];
-      antonyms = [...antonyms, ...(m.antonyms || []).slice(0, 3)];
-    }
-    synonyms = [...new Set(synonyms)].slice(0, 5);
-    antonyms = [...new Set(antonyms)].slice(0, 5);
+    let simple = "";
     
-    // Get example sentences
-    let simple = "No example available";
-    for (const m of meanings) {
-      for (const def of m.definitions || []) {
-        if (def.example) { simple = def.example; break; }
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      const entry = data[0];
+      const meanings = entry.meanings || [];
+      
+      phonetic = entry.phonetic || (entry.phonetics?.[0]?.text) || "";
+      english = meanings[0]?.definitions?.[0]?.definition || "No definition available";
+      
+      partsOfSpeech = meanings.slice(0, 3).map((m: any) => ({
+        type: m.partOfSpeech || "Unknown",
+        definition: m.definitions?.[0]?.definition || ""
+      }));
+      
+      // Get synonyms/antonyms from dictionary
+      for (const m of meanings) {
+        synonyms = [...synonyms, ...(m.synonyms || []).slice(0, 3)];
+        antonyms = [...antonyms, ...(m.antonyms || []).slice(0, 3)];
       }
-      if (simple !== "No example available") break;
+      synonyms = [...new Set(synonyms)].slice(0, 5);
+      antonyms = [...new Set(antonyms)].slice(0, 5);
+      
+      // Get example sentences
+      for (const m of meanings) {
+        for (const def of m.definitions || []) {
+          if (def.example) { simple = def.example; break; }
+        }
+        if (simple) break;
+      }
+    }
+
+    // 3. If no synonyms/antonyms/sentences, use Gemini AI to enhance
+    const needsAI = synonyms.length === 0 || antonyms.length === 0 || !simple;
+    if (needsAI) {
+      console.log("Using Gemini AI to enhance:", word);
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-2.0-flash",
+          contents: `For the word "${word}", provide:
+1. 5 synonyms
+2. 3 antonyms  
+3. 1 simple example sentence
+
+Return ONLY JSON like:
+{"synonyms":["a","b","c"],"antonyms":["x","y"],"simple":"example"}`,
+          config: {
+            responseMimeType: "application/json",
+          },
+        });
+        
+        const text = response.response.text();
+        const match = text.match(/\{[\s\S]*\}/);
+        if (match) {
+          const aiData = JSON.parse(match[0]);
+          if (synonyms.length === 0 && aiData.synonyms) synonyms = aiData.synonyms.slice(0, 5);
+          if (antonyms.length === 0 && aiData.antonyms) antonyms = aiData.antonyms.slice(0, 3);
+          if (!simple && aiData.simple) simple = aiData.simple;
+        }
+      } catch (aiError: any) {
+        console.log("AI enhancement failed:", aiError.message);
+      }
     }
 
     const result = {
       word: word,
       phonetic: phonetic,
       meaning: {
-        english,
+        english: english || "No definition available",
         bangla: getBanglaMeaning(word)
       },
       partsOfSpeech,
       synonyms,
       antonyms,
       sentences: {
-        simple,
-        compound: simple + " It is commonly used in daily conversations.",
-        complex: "When studying vocabulary, " + word + " is an important word to learn."
+        simple: simple || "No example available",
+        compound: simple ? simple + " It is commonly used in daily conversations." : "Practice makes perfect.",
+        complex: "When studying " + word + ", you discover its importance in language."
       }
     };
 
