@@ -296,9 +296,9 @@ async function generateHandler(req, res) {
       }
     }
 
-    // If AI failed, return error message
+// If AI failed, return error message
     if (synonyms.length === 0 || simple === "") {
-      console.log("AI failed for:", word);
+      console.log("AI failed for:", word, "- groqKeys available:", groqKeys.length);
       const result = {
         _version: "v2-updated",
         word: word,
@@ -312,7 +312,8 @@ async function generateHandler(req, res) {
           compound: "AI is busy, please try again in a moment",
           complex: "AI is busy, please try again in a moment"
         },
-        aiError: true
+        aiError: true,
+        debug: { groqKeysAvailable: groqKeys.length }
       };
       const userIdFromRequest = req.body?.user_id || req.query?.user_id || "unknown";
       logRequest(word, userIdFromRequest, false);
