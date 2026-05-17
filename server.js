@@ -28,19 +28,39 @@ console.log("FCM configured:", !!FCM_SERVICE_ACCOUNT);
 let messaging = null;
 
 async function initFirebase() {
-  if (!FCM_SERVICE_ACCOUNT) {
-    console.log("FCM: No service account, push notifications disabled");
-    return;
-  }
-  
   try {
-    const { initializeApp, credential } = await import('firebase-admin/app');
-    const { getMessaging } = await import('firebase-admin/messaging');
-    const serviceAccount = FCM_SERVICE_ACCOUNT;
-    const adminApp = initializeApp({
-      credential: credential.cert(serviceAccount)
-    });
-    messaging = getMessaging(adminApp);
+    const admin = await import('firebase-admin');
+    console.log("Firebase admin exports:", Object.keys(admin));
+    console.log("Has credential:", !!admin.credential);
+    
+    let adminApp;
+    
+    if (FCM_SERVICE_ACCOUNT) {
+      let serviceAccount = FCM_SERVICE_ACCOUNT;
+      if (typeof serviceAccount === 'string') {
+        try { serviceAccount = JSON.parse(serviceAccount); }
+        catch { serviceAccount = null; }
+      }
+      
+      if (serviceAccount && serviceAccount.private_key) {
+        console.log("Using service account credential");
+        adminApp = admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount)
+        });
+      } else {
+        console.log("Invalid service account, trying Application Default");
+        adminApp = admin.initializeApp({
+          credential: admin.credential.applicationDefault()
+        });
+      }
+    } else {
+      console.log("No service account, trying Application Default");
+      adminApp = admin.initializeApp({
+        credential: admin.credential.applicationDefault()
+      });
+    }
+    
+    messaging = adminApp.messaging();
     console.log("Firebase Admin initialized for Push Notifications");
   } catch (e) {
     console.log("Firebase Admin init failed:", e.message, e.stack);
