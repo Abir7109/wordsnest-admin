@@ -19,7 +19,7 @@ const users = new Map(); // userId -> { id, guestId, firstSeen, lastActive, sear
 
 // Track users
 function trackUser(userId, word) {
-  if (!userId || userId === 'anonymous') return;
+  if (!userId || userId === 'anonymous' || userId === 'unknown') return;
   
   const now = Date.now();
   const existing = users.get(userId);
@@ -258,18 +258,25 @@ Guidelines:
 - Keep sentences practical and educational`;
 
       console.log("Calling Gemini API for generate...");
+      console.log("API Key first 10 chars:", GEMINI_API_KEY?.substring(0, 10));
       
-      const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { 
-            responseMimeType: "application/json",
-            temperature: 0.7
-          }
-        })
-      });
+      let response;
+      try {
+        response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { 
+              responseMimeType: "application/json",
+              temperature: 0.7
+            }
+          })
+        });
+      } catch (fetchErr) {
+        console.log("Fetch error:", fetchErr.message);
+        throw fetchErr;
+      }
       
       console.log("Gemini response status:", response.status);
       
@@ -314,7 +321,9 @@ Guidelines:
     logRequest(word, userIdFromRequest, true);
     return res.json(result);
   } catch (error) {
-    logRequest(word, req.body?.userID || req.query?.userID, false);
+    console.log("Generate endpoint error:", error.message);
+    const userIdFromRequest = req.body?.user_id || req.query?.user_id || "unknown";
+    logRequest(word, userIdFromRequest, false);
     res.status(500).json({ error: "Failed to generate: " + error.message });
   }
 }
