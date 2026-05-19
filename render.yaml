@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: words-nest-backend
+    env: node
+    buildCommand: npm start
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+    healthCheckPath: /api/fast-ping
+
+# CRON JOB SETUP (required to prevent Render from sleeping):
+# 1. Go to https://cron-job.org and create a free account
+# 2. Create a new cron job:
+#    - URL: https://words-nest.onrender.com/api/ping-keep-alive
+#    - Schedule: Every 10 minutes
+#    - Save and activate
+# This will ping the server every 10 minutes to keep it awake!

@@ -208,11 +208,15 @@ console.log("GEMINI_API_KEY loaded:", GEMINI_API_KEY ? "YES (" + GEMINI_API_KEY.
 console.log("GROQ_API_KEY loaded:", GROQ_API_KEY ? "YES (" + GROQ_API_KEY.length + " chars)" : "NO");
 console.log("Firebase Service Account loaded:", !!serviceAccount);
 
-// Initialize Firebase Admin for FCM
+// Initialize Firebase Admin for FCM - LAZY LOAD for faster server wakeup
 let messaging = null;
 let firestore = null;
+let firebaseInitialized = false;
 
 async function initFirebase() {
+  if (firebaseInitialized) return;
+  firebaseInitialized = true;
+  
   try {
     const firebaseAdmin = await import('firebase-admin');
     const admin = firebaseAdmin.default || firebaseAdmin;
@@ -867,6 +871,23 @@ app.post("/api/app-config", async (req, res) => {
 // Install Analytics - Get install stats from Firestore
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString(), firestore: !!firestore });
+});
+
+// Keep-alive ping endpoint - use this for cron jobs to prevent Render from sleeping
+app.get("/api/ping-keep-alive", (req, res) => {
+  console.log("🔄 Keep-alive ping received at", new Date().toISOString());
+  res.json({ 
+    status: "ok", 
+    message: "Server is awake", 
+    time: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// Fast wake endpoint - responds immediately without any processing
+// Use this as health check for load balancers
+app.get("/api/fast-ping", (req, res) => {
+  res.status(200).send("OK");
 });
 
 app.get("/api/install-analytics-v2", async (req, res) => {
