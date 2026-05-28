@@ -1,55 +1,73 @@
-export enum UserType {
-  REGISTERED = 'Registered',
-  GUEST = 'Guest',
-}
-
-export interface User {
-  id: string;
-  type: UserType;
-  identity: string;
+export interface DashboardStats {
+  users: number;
+  activeUsers: number;
+  searches: number;
   words: number;
-  lastActive: string;
-  joinDate: string;
+  quizzes: number;
 }
 
-export interface RequestLog {
+export interface UserProfile {
+  uid: string;
+  email?: string;
+  username?: string;
+  status?: string;
+  install_date?: number;
+  lastActive?: number;
+  app_version?: string;
+  fcm_token?: string;
+  device_model?: string;
+}
+
+export interface SavedWord {
   id: string;
-  word: string;
   userId: string;
-  guestId: string;
-  timestamp: string;
-  time: string;
-  status: 'Success' | 'Error';
-}
-
-export interface Meaning {
-  definition: string;
-  example: string;
-}
-
-export interface PartOfSpeech {
-  pos: string;
-  definition: string;
-}
-
-export interface Sentences {
-  academic: string[];
-  colloquial: string[];
-}
-
-export interface AnalyzeResponse {
   word: string;
-  meaning: Meaning;
-  partsOfSpeech: PartOfSpeech[];
-  synonyms: string[];
-  antonyms: string[];
-  sentences: Sentences;
+  type?: string;
+  definition?: string;
+  phonetic?: string;
+  timestamp?: number;
 }
 
-export interface AIConfiguration {
-  systemPrompt: string;
-  temperature: number;
-  topK: number;
-  topP: number;
-  maxOutputTokens: number;
+export interface SearchEvent {
+  id: string;
+  user_id?: string;
+  word?: string;
+  timestamp?: number;
+  status?: string;
+}
+
+export interface QuizEvent {
+  id: string;
+  userId: string;
+  score?: number;
+  timestamp?: number;
+}
+
+export interface AppConfig {
+  isAppAlive: boolean;
+  underMaintenance: boolean;
+  maintenanceTitle: string;
+  maintenanceMessage: string;
+  maintenanceEstimatedTime: string;
+  forceUpdate: boolean;
+  softUpdate: boolean;
+  currentVersion: string;
+  minRequiredVersion: string;
+  updateUrl: string;
+  updateMessage: string;
+}
+
+export interface NotificationItem {
+  title: string;
+  message: string;
+  target: string;
+  sentAt: number;
+  success: boolean;
+  error?: string;
+}
+
+export interface Tab {
+  id: string;
+  label: string;
+  icon: string;
 }

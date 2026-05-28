@@ -1,82 +1,57 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Source Serif 4", serif;
-
-  --color-surface: #19120e;
-  --color-surface-dim: #19120e;
-  --color-surface-bright: #403733;
-  --color-surface-container-lowest: #130d09;
-  --color-surface-container-low: #211a16;
-  --color-surface-container: #261e1a;
-  --color-surface-container-high: #302824;
-  --color-surface-container-highest: #3c332f;
-  --color-on-surface: #efdfd9;
-  --color-on-surface-variant: #d0c5ba;
-  --color-inverse-surface: #efdfd9;
-  --color-inverse-on-surface: #372f2a;
-  --color-outline: #988f85;
-  --color-outline-variant: #4d463d;
-  --color-surface-tint: #d8c3aa;
-  --color-primary: #e6d0b6;
-  --color-on-primary: #3b2e1c;
-  --color-primary-container: #c9b59c;
-  --color-on-primary-container: #554633;
-  --color-inverse-primary: #6b5c47;
-  --color-secondary: #aad0ad;
-  --color-on-secondary: #16371f;
-  --color-secondary-container: #2d4e33;
-  --color-on-secondary-container: #99be9d;
-  --color-tertiary: #ced4e3;
-  --color-on-tertiary: #2a313c;
-  --color-tertiary-container: #b2b8c7;
-  --color-on-tertiary-container: #434955;
-  --color-error: #ffb4ab;
-  --color-on-error: #690005;
-  --color-error-container: #93000a;
-  --color-on-error-container: #ffdad6;
-  --color-primary-fixed: #f5dfc5;
-  --color-primary-fixed-dim: #d8c3aa;
-  --color-on-primary-fixed: #241a09;
-  --color-on-primary-fixed-variant: #534431;
-  --color-secondary-fixed: #c6ecc8;
-  --color-secondary-fixed-dim: #aad0ad;
-  --color-on-secondary-fixed: #00210b;
-  --color-on-secondary-fixed-variant: #2d4e33;
-  --color-tertiary-fixed: #dde2f2;
-  --color-tertiary-fixed-dim: #c0c6d6;
-  --color-on-tertiary-fixed: #151c27;
-  --color-on-tertiary-fixed-variant: #414753;
-  --color-background: #19120e;
-  --color-on-background: #efdfd9;
-  --color-surface-variant: #3c332f;
-
-  --spacing-base: 4px;
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
-  --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
-  --spacing-gutter: 20px;
-  --spacing-margin: 32px;
+  --color-nest-brown: #2A170F;
+  --color-nest-tan: #F5F0EB;
+  --color-nest-cream: #FFFBF5;
+  --color-nest-amber: #D48A4A;
+  --color-nest-muted: #897365;
+  --color-nest-border: #E8DDD0;
+  --color-nest-accent: #AA7137;
+  --font-serif: 'Georgia', 'Times New Roman', serif;
 }
 
-@layer base {
-  body {
-    @apply bg-background text-on-surface font-sans antialiased;
-  }
-
-  .material-symbols-outlined {
-    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-    display: inline-block;
-    vertical-align: middle;
-  }
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-@layer utilities {
-  .font-display {
-    font-family: var(--font-display);
-  }
+.sidebar-link {
+  @apply flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200;
+}
+
+.sidebar-link:hover {
+  @apply bg-[#2A170F]/5;
+}
+
+.sidebar-link.active {
+  @apply bg-[#D48A4A]/15 text-[#AA7137];
+}
+
+.stats-card {
+  @apply bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-5 transition-all duration-200;
+}
+
+.stats-card:hover {
+  @apply shadow-lg border-[#D48A4A]/30;
+}
+
+.btn-primary {
+  @apply bg-[#AA7137] text-white px-5 py-2 rounded-lg text-sm font-semibold transition-all duration-200 hover:bg-[#8B5E2E] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-ghost {
+  @apply text-[#897365] px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 hover:bg-[#2A170F]/5;
+}
+
+.input-field {
+  @apply w-full px-4 py-2.5 rounded-lg border border-[#E8DDD0] bg-[#FFFBF5] text-sm text-[#2A170F] placeholder-[#BFA090] outline-none transition-all duration-200 focus:border-[#D48A4A] focus:ring-2 focus:ring-[#D48A4A]/20;
+}
+
+.table-header {
+  @apply text-xs font-semibold text-[#897365] uppercase tracking-wider px-4 py-3 text-left;
+}
+
+.table-cell {
+  @apply px-4 py-3 text-sm text-[#2A170F] border-b border-[#E8DDD0]/50;
 }
