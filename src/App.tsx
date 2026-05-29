@@ -8,11 +8,13 @@ import Quizzes from './pages/Quizzes';
 import AppControl from './pages/AppControl';
 import Notifications from './pages/Notifications';
 import Analytics from './pages/Analytics';
-import { LayoutDashboard, Users as UsersIcon, BookOpen, Search, Brain, Settings, Bell, BarChart3 } from 'lucide-react';
+import LeaderboardPage from './pages/Leaderboard';
+import { LayoutDashboard, Users as UsersIcon, BookOpen, Search, Brain, Settings, Bell, BarChart3, Trophy } from 'lucide-react';
 
 const tabs = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'users', label: 'Users', icon: UsersIcon },
+  { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
   { id: 'words', label: 'Saved Words', icon: BookOpen },
   { id: 'searches', label: 'Searches', icon: Search },
   { id: 'quizzes', label: 'Quizzes', icon: Brain },
@@ -46,6 +48,7 @@ export default function App() {
       case 'words': return <Words />;
       case 'searches': return <Searches />;
       case 'quizzes': return <Quizzes />;
+      case 'leaderboard': return <LeaderboardPage />;
       case 'appcontrol': return <AppControl />;
       case 'notifications': return <Notifications />;
       case 'analytics': return <Analytics />;

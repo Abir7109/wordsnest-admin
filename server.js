@@ -604,6 +604,161 @@ app.get('/api/quizzes/stats', requireFirebase, async (req, res) => {
   }
 });
 
+// ── Leaderboard ──────────────────────────────────────────────────────
+app.get('/api/leaderboard', requireFirebase, async (req, res) => {
+  try {
+    const currentUid = req.query.uid || '';
+
+    const [usersSnap, searchSnap, wordsSnap, quizzesSnap] = await Promise.all([
+      db.collection('users').get(),
+      db.collection('search_events').get(),
+      db.collectionGroup('words').get(),
+      db.collectionGroup('quizzes').get(),
+    ]);
+
+    const searchCounts = {};
+    for (const d of searchSnap.docs) {
+      const uid = d.data().user_id;
+      if (uid) searchCounts[uid] = (searchCounts[uid] || 0) + 1;
+    }
+
+    const wordCounts = {};
+    for (const d of wordsSnap.docs) {
+      const uid = d.ref.parent.parent?.id;
+      if (uid) wordCounts[uid] = (wordCounts[uid] || 0) + 1;
+    }
+
+    const quizTotals = {};
+    for (const d of quizzesSnap.docs) {
+      const uid = d.ref.parent.parent?.id;
+      if (uid) quizTotals[uid] = (quizTotals[uid] || 0) + (d.data().score || 0);
+    }
+
+    const entries = [];
+    for (const d of usersSnap.docs) {
+      const data = d.data();
+      const uid = d.id;
+      const searches = searchCounts[uid] || 0;
+      const quizScore = quizTotals[uid] || 0;
+      const wordsSaved = wordCounts[uid] || 0;
+
+      const lastActive = data.lastActive || 0;
+      const daysSinceActive = lastActive > 0 ? Math.floor((Date.now() - lastActive) / 86400000) : 999;
+      let streak = daysSinceActive <= 1 ? Math.max(1, Math.min(30, Math.floor((data.totalDaysActive || 0) / 3))) : 0;
+      if (data.leaderboardStreak !== undefined && data.leaderboardStreak !== null) streak = data.leaderboardStreak;
+
+      const manualScore = data.leaderboardManualScore;
+      const rankPoints = manualScore !== undefined && manualScore !== null
+        ? manualScore
+        : Math.min(searches, 5) * 2 + quizScore + streak * 3;
+
+      entries.push({
+        uid,
+        name: data.username || data.email?.split('@')[0] || 'Anonymous',
+        emoji: data.emoji || '🌿',
+        score: rankPoints,
+        words: wordsSaved,
+        quiz: quizScore,
+        streak,
+        isUser: uid === currentUid,
+        lastActive: data.lastActive || 0,
+        email: data.email || '',
+      });
+    }
+
+    entries.sort((a, b) => b.score - a.score);
+    entries.forEach((entry, i) => { entry.rank = i + 1; });
+
+    const publicEntries = entries.map(({ uid, email, lastActive, ...rest }) => rest);
+    res.json({ leaderboard: publicEntries });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/admin/leaderboard', requireFirebase, async (req, res) => {
+  try {
+    const [usersSnap, searchSnap, wordsSnap, quizzesSnap] = await Promise.all([
+      db.collection('users').get(),
+      db.collection('search_events').get(),
+      db.collectionGroup('words').get(),
+      db.collectionGroup('quizzes').get(),
+    ]);
+
+    const searchCounts = {};
+    for (const d of searchSnap.docs) {
+      const uid = d.data().user_id;
+      if (uid) searchCounts[uid] = (searchCounts[uid] || 0) + 1;
+    }
+
+    const wordCounts = {};
+    for (const d of wordsSnap.docs) {
+      const uid = d.ref.parent.parent?.id;
+      if (uid) wordCounts[uid] = (wordCounts[uid] || 0) + 1;
+    }
+
+    const quizTotals = {};
+    for (const d of quizzesSnap.docs) {
+      const uid = d.ref.parent.parent?.id;
+      if (uid) quizTotals[uid] = (quizTotals[uid] || 0) + (d.data().score || 0);
+    }
+
+    const entries = [];
+    for (const d of usersSnap.docs) {
+      const data = d.data();
+      const uid = d.id;
+      const searches = searchCounts[uid] || 0;
+      const quizScore = quizTotals[uid] || 0;
+      const wordsSaved = wordCounts[uid] || 0;
+
+      const lastActive = data.lastActive || 0;
+      const daysSinceActive = lastActive > 0 ? Math.floor((Date.now() - lastActive) / 86400000) : 999;
+      let streak = daysSinceActive <= 1 ? Math.max(1, Math.min(30, Math.floor((data.totalDaysActive || 0) / 3))) : 0;
+      if (data.leaderboardStreak !== undefined && data.leaderboardStreak !== null) streak = data.leaderboardStreak;
+
+      const manualScore = data.leaderboardManualScore;
+
+      entries.push({
+        uid,
+        name: data.username || data.email?.split('@')[0] || 'Anonymous',
+        emoji: data.emoji || '🌿',
+        score: manualScore !== undefined && manualScore !== null
+          ? manualScore
+          : Math.min(searches, 5) * 2 + quizScore + streak * 3,
+        computedScore: Math.min(searches, 5) * 2 + quizScore + streak * 3,
+        manualScore: manualScore ?? null,
+        words: wordsSaved,
+        searches,
+        quiz: quizScore,
+        streak,
+        lastActive: data.lastActive || 0,
+        email: data.email || '',
+      });
+    }
+
+    entries.sort((a, b) => b.score - a.score);
+    entries.forEach((entry, i) => { entry.rank = i + 1; });
+
+    res.json({ leaderboard: entries });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/admin/leaderboard/:uid', requireFirebase, async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { manualScore, streak } = req.body;
+    const updateData = {};
+    if (manualScore !== undefined) updateData.leaderboardManualScore = manualScore;
+    if (streak !== undefined) updateData.leaderboardStreak = streak;
+    await db.collection('users').doc(uid).update(updateData);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── App Config ───────────────────────────────────────────────────────
 app.get('/api/app-config', requireFirebase, async (req, res) => {
   try {
