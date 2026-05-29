@@ -1,12 +1,9 @@
 services:
   - type: web
-    name: words-nest-admin
-    env: node
-    buildCommand: npm install && npm run build
+    name: wordsnest-admin
+    runtime: node
+    buildCommand: npm run build
     startCommand: node server.js
-    healthCheckPath: /api/health
     envVars:
-      - key: PORT
-        value: 10000
-      - key: FCM_SERVICE_ACCOUNT
-        sync: false
+      - key: NODE_VERSION
+        value: 22
