@@ -888,7 +888,7 @@ app.post('/api/enrich-word', async (req, res) => {
   "complexSentence": "A longer complex sentence using ${word} that shows deeper context.",
   "compoundSentence": "A compound sentence using ${word} with two independent clauses."
 }
-Make sure synonyms and antonyms are real English words that are actually synonymous/antonymous with "${word}". Return ONLY the JSON.`;
+Make sure synonyms and antonyms are real English words that are actually synonymous/antonymous with "${word}". Keep sentences natural and educational. Return ONLY the JSON.`;
 
   let aiText = await callGemini(prompt);
   if (!aiText) {
