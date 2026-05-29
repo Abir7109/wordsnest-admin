@@ -1038,7 +1038,27 @@ async function callGemini(prompt) {
 async function callGroq(apiKey, prompt) {
   if (!apiKey) return null;
   try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    // Try xAI (Grok) first — this matches the user's API keys
+    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'grok-2-latest',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 800,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data?.choices?.[0]?.message?.content || null;
+    }
+    // Fallback to Groq's API if xAI fails
+    console.error(`xAI/Grok error (${apiKey.slice(0,8)}...): ${res.status} ${await res.text()}`);
+    const res2 = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1051,10 +1071,10 @@ async function callGroq(apiKey, prompt) {
         max_tokens: 800,
       }),
     });
-    if (!res.ok) { console.error(`Groq error (${apiKey.slice(0,8)}...): ${res.status} ${await res.text()}`); return null; }
-    const data = await res.json();
-    return data?.choices?.[0]?.message?.content || null;
-  } catch (e) { console.error('Groq exception:', e.message); return null; }
+    if (!res2.ok) { console.error(`Groq error: ${res2.status} ${await res2.text()}`); return null; }
+    const data2 = await res2.json();
+    return data2?.choices?.[0]?.message?.content || null;
+  } catch (e) { console.error('AI call exception:', e.message); return null; }
 }
 
 function parseAiResponse(text) {
