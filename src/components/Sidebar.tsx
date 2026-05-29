@@ -1,9 +1,10 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { motion } from 'motion/react';
+import type { LucideIcon } from 'lucide-react';
 
 interface Tab {
   id: string;
   label: string;
-  icon: string;
+  icon: LucideIcon;
 }
 
 interface SidebarProps {
@@ -29,10 +30,10 @@ export function Sidebar({ tabs, activeTab, onTabChange }: SidebarProps) {
         {tabs.map(tab => (
           <button
             key={tab.id}
-            onClick={() => onTabChange(tab.id)}
+            onClick={() => { onTabChange(tab.id); window.location.hash = tab.id; }}
             className={`sidebar-link w-full text-left ${activeTab === tab.id ? 'active' : 'text-[#2A170F]'}`}
           >
-            <span className="text-lg">{tab.icon}</span>
+            <tab.icon className="w-5 h-5" />
             <span>{tab.label}</span>
             {activeTab === tab.id && (
               <motion.div

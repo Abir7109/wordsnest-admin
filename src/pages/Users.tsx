@@ -1,15 +1,11 @@
 import { useEffect, useState } from 'react';
-import { motion } from 'motion/react';
-import { Search, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
-import type { UserProfile, SavedWord, QuizEvent } from '../types';
+import { motion, AnimatePresence } from 'motion/react';
+import { Search, Trash2, ChevronDown, ChevronRight, X, Mail, Smartphone, Calendar, Shield, BookOpen, Brain, Activity, Filter, Download } from 'lucide-react';
+import type { UserProfile } from '../types';
 
-interface UserDetail {
-  savedWords: SavedWord[];
-  quizEvents: QuizEvent[];
-}
-
-function timeAgo(timestamp: number): string {
-  const diff = Date.now() - timestamp;
+function timeAgo(ts) {
+  if (!ts) return '—';
+  const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
@@ -19,230 +15,260 @@ function timeAgo(timestamp: number): string {
   return `${days}d ago`;
 }
 
-const rowVariants = {
-  hidden: { opacity: 0, y: 12 },
-  show: (i: number) => ({
-    opacity: 1,
-    y: 0,
-    transition: { delay: i * 0.04, type: 'spring', stiffness: 80, damping: 14 },
-  }),
-};
+function UserDetailModal({ uid, onClose }) {
+  const [detail, setDetail] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${window.location.origin}/api/users/${uid}`)
+      .then(r => r.json())
+      .then(data => { setDetail(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [uid]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        className="bg-[#FFFBF5] rounded-2xl border border-[#E8DDD0] w-full max-w-2xl max-h-[80vh] overflow-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-[#FFFBF5] border-b border-[#E8DDD0] px-6 py-4 flex items-center justify-between z-10">
+          <h2 className="text-lg font-bold text-[#2A170F]">User Details</h2>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-[#F5F0EB] flex items-center justify-center text-[#897365]">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        {loading ? (
+          <div className="p-8 text-center text-[#897365]">Loading...</div>
+        ) : detail ? (
+          <div className="p-6 space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-[#F5F0EB] rounded-xl p-4">
+                <div className="flex items-center gap-2 text-xs text-[#897365] mb-1"><Mail className="w-3 h-3" />Email</div>
+                <p className="text-sm font-medium text-[#2A170F] break-all">{detail.profile?.email || '—'}</p>
+              </div>
+              <div className="bg-[#F5F0EB] rounded-xl p-4">
+                <div className="flex items-center gap-2 text-xs text-[#897365] mb-1"><Shield className="w-3 h-3" />Status</div>
+                <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${detail.profile?.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                  {detail.profile?.status || 'inactive'}
+                </span>
+              </div>
+              <div className="bg-[#F5F0EB] rounded-xl p-4">
+                <div className="flex items-center gap-2 text-xs text-[#897365] mb-1"><Smartphone className="w-3 h-3" />Device</div>
+                <p className="text-sm text-[#2A170F]">{detail.profile?.device_model || '—'}</p>
+              </div>
+              <div className="bg-[#F5F0EB] rounded-xl p-4">
+                <div className="flex items-center gap-2 text-xs text-[#897365] mb-1"><Calendar className="w-3 h-3" />Joined</div>
+                <p className="text-sm text-[#2A170F]">{detail.profile?.createdAt ? new Date(detail.profile.createdAt).toLocaleDateString() : '—'}</p>
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-[#2A170F] mb-3 flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-[#AA7137]" /> Saved Words ({detail.words?.length || 0})
+              </h3>
+              <div className="space-y-1.5 max-h-40 overflow-auto">
+                {(detail.words || []).map(w => (
+                  <div key={w.id || w.word} className="flex items-center justify-between bg-[#F5F0EB] rounded-lg px-3 py-2 text-sm">
+                    <span className="font-medium text-[#2A170F]">{w.word}</span>
+                    <div className="flex items-center gap-2">
+                      {w.type && <span className="text-[10px] text-[#AA7137] bg-white px-1.5 py-0.5 rounded">{w.type}</span>}
+                      <span className="text-[10px] text-[#897365]">{timeAgo(w.timestamp)}</span>
+                    </div>
+                  </div>
+                ))}
+                {(!detail.words || detail.words.length === 0) && (
+                  <p className="text-sm text-[#897365] py-2">No saved words</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-[#2A170F] mb-3 flex items-center gap-2">
+                <Brain className="w-4 h-4 text-purple-500" /> Quiz History ({detail.quizzes?.length || 0})
+              </h3>
+              <div className="space-y-1.5 max-h-40 overflow-auto">
+                {(detail.quizzes || []).map((q, i) => (
+                  <div key={q.id || i} className="flex items-center justify-between bg-[#F5F0EB] rounded-lg px-3 py-2 text-sm">
+                    <span className="text-[#2A170F]">Score: <strong>{q.score ?? '—'}%</strong></span>
+                    <span className="text-[10px] text-[#897365]">{timeAgo(q.timestamp)}</span>
+                  </div>
+                ))}
+                {(!detail.quizzes || detail.quizzes.length === 0) && (
+                  <p className="text-sm text-[#897365] py-2">No quizzes taken</p>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="p-8 text-center text-[#897365]">Failed to load user details</div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
 
 export default function Users() {
-  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [users, setUsers] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [expandedUid, setExpandedUid] = useState<string | null>(null);
-  const [userDetails, setUserDetails] = useState<Record<string, UserDetail>>({});
+  const [selectedUid, setSelectedUid] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [versionFilter, setVersionFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('lastActive');
 
   useEffect(() => {
     fetch(`${window.location.origin}/api/users`)
-      .then((res) => res.json())
-      .then((data: { users: UserProfile[] }) => {
+      .then(r => r.json())
+      .then(data => {
         setUsers(data.users ?? []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
   }, []);
 
-  const filtered = users.filter((u) => {
+  const versions = [...new Set(users.map(u => u.app_version).filter(Boolean))];
+
+  const filtered = users.filter(u => {
+    if (statusFilter !== 'all' && u.status !== statusFilter) return false;
+    if (versionFilter !== 'all' && u.app_version !== versionFilter) return false;
     if (!search) return true;
     const q = search.toLowerCase();
-    return (
-      u.uid?.toLowerCase().includes(q) ||
-      u.email?.toLowerCase().includes(q) ||
-      u.username?.toLowerCase().includes(q)
-    );
+    return (u.uid?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q) || u.username?.toLowerCase().includes(q));
   });
 
-  const toggleExpand = (uid: string) => {
-    if (expandedUid === uid) {
-      setExpandedUid(null);
-      return;
-    }
-    setExpandedUid(uid);
-    if (!userDetails[uid]) {
-      fetch(`${window.location.origin}/api/users/${uid}`)
-        .then((res) => res.json())
-        .then((detail: UserDetail) => {
-          setUserDetails((prev) => ({ ...prev, [uid]: detail }));
-        })
-        .catch(() => {});
-    }
-  };
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'lastActive') return (b.lastActive || 0) - (a.lastActive || 0);
+    if (sortBy === 'words') return (b.wordCount || 0) - (a.wordCount || 0);
+    if (sortBy === 'quizzes') return (b.quizCount || 0) - (a.quizCount || 0);
+    return 0;
+  });
 
-  const deleteUser = (uid: string) => {
-    if (!window.confirm(`Are you sure you want to delete user ${uid}?`)) return;
-    fetch(`${window.location.origin}/api/users/${uid}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method: 'DELETE' }),
-    })
-      .then(() => {
-        setUsers((prev) => prev.filter((u) => u.uid !== uid));
-      })
-      .catch(() => {});
-  };
+  const totalWords = users.reduce((s, u) => s + (u.wordCount || 0), 0);
+  const totalQuizzes = users.reduce((s, u) => s + (u.quizCount || 0), 0);
+  const activeUsers = users.filter(u => u.status === 'active').length;
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64 text-[#897365] text-lg">
-        Loading...
-      </div>
-    );
+    return <div className="flex items-center justify-center h-64 text-[#897365]">Loading...</div>;
   }
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-[#2A170F] mb-6">Users</h1>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-[#2A170F]">Users</h1>
+          <p className="text-sm text-[#897365] mt-0.5">{users.length} total · {activeUsers} active · {totalWords} words · {totalQuizzes} quizzes</p>
+        </div>
+      </div>
 
-      <div className="relative mb-5 max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#897365]" />
-        <input
-          type="text"
-          placeholder="Search by UID, email or username..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-4 py-2 bg-[#FFFBF5] border border-[#E8DDD0] rounded-lg text-sm text-[#2A170F] placeholder-[#897365] outline-none focus:border-[#D48A4A]"
-        />
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-5">
+        <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-3">
+          <span className="text-xs text-[#897365]">Total</span>
+          <p className="text-xl font-bold text-[#2A170F]">{users.length}</p>
+        </div>
+        <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-3">
+          <span className="text-xs text-[#897365]">Active</span>
+          <p className="text-xl font-bold text-green-600">{activeUsers}</p>
+        </div>
+        <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-3">
+          <span className="text-xs text-[#897365]">Total Words</span>
+          <p className="text-xl font-bold text-[#AA7137]">{totalWords}</p>
+        </div>
+        <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-3">
+          <span className="text-xs text-[#897365]">Total Quizzes</span>
+          <p className="text-xl font-bold text-purple-600">{totalQuizzes}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 mb-5">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#897365]" />
+          <input type="text" placeholder="Search by UID, email or username..." value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 bg-[#FFFBF5] border border-[#E8DDD0] rounded-lg text-sm text-[#2A170F] placeholder-[#897365] outline-none focus:border-[#D48A4A]" />
+        </div>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+          className="px-3 py-2 bg-[#FFFBF5] border border-[#E8DDD0] rounded-lg text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]">
+          <option value="all">All Status</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <select value={versionFilter} onChange={e => setVersionFilter(e.target.value)}
+          className="px-3 py-2 bg-[#FFFBF5] border border-[#E8DDD0] rounded-lg text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]">
+          <option value="all">All Versions</option>
+          {versions.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          className="px-3 py-2 bg-[#FFFBF5] border border-[#E8DDD0] rounded-lg text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]">
+          <option value="lastActive">Sort: Last Active</option>
+          <option value="words">Sort: Words Saved</option>
+          <option value="quizzes">Sort: Quizzes Taken</option>
+        </select>
       </div>
 
       <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[#E8DDD0] text-left text-[#897365] text-xs uppercase tracking-wider">
-              <th className="p-4 font-medium">UID</th>
-              <th className="p-4 font-medium">Email</th>
-              <th className="p-4 font-medium">Username</th>
-              <th className="p-4 font-medium">Status</th>
-              <th className="p-4 font-medium">Device</th>
-              <th className="p-4 font-medium">App Version</th>
-              <th className="p-4 font-medium">Last Active</th>
-              <th className="p-4 font-medium text-right">Actions</th>
+              <th className="p-3 font-medium">UID</th>
+              <th className="p-3 font-medium">Email</th>
+              <th className="p-3 font-medium">Status</th>
+              <th className="p-3 font-medium">Version</th>
+              <th className="p-3 font-medium">Words</th>
+              <th className="p-3 font-medium">Quizzes</th>
+              <th className="p-3 font-medium">Avg Score</th>
+              <th className="p-3 font-medium">Last Active</th>
+              <th className="p-3 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((user, i) => (
-              <motion.tr
-                key={user.uid}
-                custom={i}
-                variants={rowVariants}
-                initial="hidden"
-                animate="show"
+            {sorted.map((user, i) => (
+              <motion.tr key={user.uid}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.02 }}
                 className="border-b border-[#E8DDD0] last:border-0 hover:bg-[#F5F0EB]/50 cursor-pointer"
-                onClick={() => toggleExpand(user.uid)}
+                onClick={() => setSelectedUid(user.uid)}
               >
-                <td className="p-4 font-mono text-xs text-[#2A170F]">{user.uid}</td>
-                <td className="p-4 text-[#2A170F]">{user.email || '—'}</td>
-                <td className="p-4 text-[#2A170F]">{user.username || '—'}</td>
-                <td className="p-4">
-                  <span
-                    className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      user.status === 'active'
-                        ? 'bg-green-100 text-green-700'
-                        : 'bg-gray-100 text-gray-500'
-                    }`}
-                  >
+                <td className="p-3 font-mono text-xs text-[#2A170F] max-w-[120px] truncate">{user.uid}</td>
+                <td className="p-3 text-[#2A170F]">{user.email || '—'}</td>
+                <td className="p-3">
+                  <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${user.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                     {user.status || 'inactive'}
                   </span>
                 </td>
-                <td className="p-4 text-[#897365]">{user.device_model || '—'}</td>
-                <td className="p-4 text-[#897365]">{user.app_version || '—'}</td>
-                <td className="p-4 text-[#897365] whitespace-nowrap">
-                  {user.lastActive ? timeAgo(user.lastActive) : '—'}
-                </td>
-                <td className="p-4 text-right">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteUser(user.uid);
-                    }}
-                    className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-[#897365] hover:text-red-500 hover:bg-red-50 transition-colors"
-                    title="Delete user"
-                  >
-                    <Trash2 className="w-4 h-4" />
+                <td className="p-3 text-[#897365] text-xs">{user.app_version || '—'}</td>
+                <td className="p-3 font-medium text-[#AA7137]">{user.wordCount || 0}</td>
+                <td className="p-3 font-medium text-purple-600">{user.quizCount || 0}</td>
+                <td className="p-3 text-[#2A170F]">{user.averageScore ? `${user.averageScore}%` : '—'}</td>
+                <td className="p-3 text-[#897365] text-xs whitespace-nowrap">{timeAgo(user.lastActive)}</td>
+                <td className="p-3 text-right">
+                  <button onClick={e => { e.stopPropagation(); if (window.confirm(`Delete user ${user.uid}?`)) fetch(`${window.location.origin}/api/users/${user.uid}`, { method: 'DELETE' }).then(() => setUsers(prev => prev.filter(u => u.uid !== user.uid))); }}
+                    className="w-7 h-7 rounded-lg text-[#897365] hover:text-red-500 hover:bg-red-50 transition-colors inline-flex items-center justify-center">
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
-                  <span className="inline-flex items-center justify-center w-8 h-8 text-[#897365]">
-                    {expandedUid === user.uid ? (
-                      <ChevronDown className="w-4 h-4" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4" />
-                    )}
-                  </span>
                 </td>
               </motion.tr>
             ))}
           </tbody>
         </table>
-
-        {filtered.length === 0 && (
-          <div className="p-8 text-center text-[#897365]">No users found.</div>
+        {sorted.length === 0 && (
+          <div className="p-8 text-center text-[#897365]">No users found matching your filters.</div>
         )}
       </div>
 
-      {expandedUid && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          className="mt-4 bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-5 overflow-hidden"
-        >
-          <h2 className="text-sm font-semibold text-[#2A170F] mb-3">
-            User Details — {expandedUid}
-          </h2>
-          {userDetails[expandedUid] ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div>
-                <h3 className="text-xs font-medium text-[#897365] uppercase tracking-wider mb-2">
-                  Saved Words
-                </h3>
-                {userDetails[expandedUid].savedWords.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {userDetails[expandedUid].savedWords.map((w) => (
-                      <div
-                        key={w.id}
-                        className="flex items-center justify-between bg-[#F5F0EB] rounded-lg px-3 py-2 text-sm"
-                      >
-                        <span className="font-medium text-[#2A170F]">{w.word}</span>
-                        <span className="text-xs text-[#897365]">
-                          {w.timestamp ? timeAgo(w.timestamp) : ''}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-[#897365]">No saved words.</p>
-                )}
-              </div>
-              <div>
-                <h3 className="text-xs font-medium text-[#897365] uppercase tracking-wider mb-2">
-                  Quiz Stats
-                </h3>
-                {userDetails[expandedUid].quizEvents.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {userDetails[expandedUid].quizEvents.map((q) => (
-                      <div
-                        key={q.id}
-                        className="flex items-center justify-between bg-[#F5F0EB] rounded-lg px-3 py-2 text-sm"
-                      >
-                        <span className="text-[#2A170F]">
-                          Score: <strong>{q.score ?? '—'}</strong>
-                        </span>
-                        <span className="text-xs text-[#897365]">
-                          {q.timestamp ? timeAgo(q.timestamp) : ''}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-[#897365]">No quizzes taken.</p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-[#897365]">Loading details...</p>
-          )}
-        </motion.div>
-      )}
+      <AnimatePresence>
+        {selectedUid && <UserDetailModal uid={selectedUid} onClose={() => setSelectedUid(null)} />}
+      </AnimatePresence>
     </div>
   );
 }

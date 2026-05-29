@@ -1,10 +1,11 @@
 import { ReactNode } from 'react';
 import { Sidebar } from './Sidebar';
+import type { LucideIcon } from 'lucide-react';
 
 interface Tab {
   id: string;
   label: string;
-  icon: string;
+  icon: LucideIcon;
 }
 
 interface LayoutProps {

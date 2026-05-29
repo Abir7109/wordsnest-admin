@@ -13,7 +13,6 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
 
-// ── Firebase Admin Init ──────────────────────────────────────────────
 let admin, db, messaging;
 let firebaseReady = false;
 
@@ -52,7 +51,6 @@ async function initFirebase() {
 
 setTimeout(() => initFirebase(), 100);
 
-// ── Middleware ────────────────────────────────────────────────────────
 function requireFirebase(req, res, next) {
   if (!firebaseReady) {
     return res.status(503).json({ error: 'Firebase not initialized' });
@@ -60,36 +58,288 @@ function requireFirebase(req, res, next) {
   next();
 }
 
-// ── Health ───────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', firebase: firebaseReady });
 });
 
 app.get('/api/ping-keep-alive', (req, res) => res.json({ pong: Date.now() }));
 
+// ── Helpers ──────────────────────────────────────────────────────────
+function getDayStart(ts = Date.now()) {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function getDaysAgo(n) {
+  return getDayStart() - n * 86400000;
+}
+
+function formatDateLabel(ts) {
+  const d = new Date(ts);
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return `${days[d.getDay()]} ${d.getDate()}`;
+}
+
+function countByDay(docs, field = 'timestamp') {
+  const dayMap = {};
+  for (const d of docs) {
+    const ts = d[field];
+    if (!ts) continue;
+    const day = getDayStart(typeof ts === 'number' ? ts : ts.toMillis ? ts.toMillis() : ts);
+    dayMap[day] = (dayMap[day] || 0) + 1;
+  }
+  return dayMap;
+}
+
 // ── Dashboard Stats ──────────────────────────────────────────────────
 app.get('/api/dashboard', requireFirebase, async (req, res) => {
   try {
-    const [usersSnap, searchesSnap, wordsSnap, quizzesSnap] = await Promise.all([
+    const dayAgo = Date.now() - 86400000;
+    const todayStart = getDayStart();
+
+    const [
+      usersSnap, searchesSnap, wordsSnap, quizzesSnap,
+      activeSnap, newTodaySnap, searchesTodaySnap,
+      wordsTodaySnap, quizzesTodaySnap, installsSnap,
+    ] = await Promise.all([
       db.collection('users').count().get(),
       db.collection('search_events').count().get(),
       db.collectionGroup('words').count().get(),
       db.collectionGroup('quizzes').count().get(),
+      db.collection('users').where('lastActive', '>=', dayAgo).count().get(),
+      db.collection('users').where('createdAt', '>=', todayStart).count().get(),
+      db.collection('search_events').where('timestamp', '>=', todayStart).count().get(),
+      db.collectionGroup('words').where('timestamp', '>=', todayStart).count().get(),
+      db.collectionGroup('quizzes').where('timestamp', '>=', todayStart).count().get(),
+      db.collection('installs').count().get(),
     ]);
 
     const users = usersSnap.data().count || 0;
     const searches = searchesSnap.data().count || 0;
     const words = wordsSnap.data().count || 0;
     const quizzes = quizzesSnap.data().count || 0;
-
-    // Active users in last 24h
-    const dayAgo = Date.now() - 86400000;
-    const activeSnap = await db.collection('users')
-      .where('lastActive', '>=', dayAgo)
-      .count().get();
     const activeUsers = activeSnap.data().count || 0;
+    const newUsersToday = newTodaySnap.data().count || 0;
+    const searchesToday = searchesTodaySnap.data().count || 0;
+    const wordsToday = wordsTodaySnap.data().count || 0;
+    const quizzesToday = quizzesTodaySnap.data().count || 0;
+    const totalInstalls = installsSnap.data().count || 0;
 
-    res.json({ users, activeUsers, searches, words, quizzes });
+    let averageQuizScore = 0;
+    const recentQuizzesSnap = await db.collectionGroup('quizzes')
+      .orderBy('timestamp', 'desc').limit(500).get();
+    const scores = recentQuizzesSnap.docs.map(d => d.data().score).filter(Boolean);
+    if (scores.length > 0) {
+      averageQuizScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+    }
+
+    let uniqueWordsSaved = 0;
+    let topWordType = 'N/A';
+    const typeCounts = {};
+    const uniqueWords = new Set();
+    const wordsSnapAll = await db.collectionGroup('words').limit(1000).get();
+    for (const d of wordsSnapAll.docs) {
+      const data = d.data();
+      if (data.word) uniqueWords.add(data.word.toLowerCase());
+      if (data.type) {
+        typeCounts[data.type] = (typeCounts[data.type] || 0) + 1;
+      }
+    }
+    uniqueWordsSaved = uniqueWords.size;
+    if (Object.keys(typeCounts).length > 0) {
+      topWordType = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0];
+    }
+
+    const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
+    const weekAgo = getDaysAgo(7);
+    const weekAgoUsersSnap = await db.collection('users')
+      .where('createdAt', '<=', weekAgo).count().get();
+    const usersBeforeWeek = weekAgoUsersSnap.data().count || 0;
+    const retainedSnap = await db.collection('users')
+      .where('lastActive', '>=', getDaysAgo(1))
+      .where('createdAt', '<=', weekAgo).count().get();
+    const retained = retainedSnap.data().count || 0;
+    const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
+
+    res.json({
+      users, activeUsers, searches, words, quizzes,
+      newUsersToday, dailyActiveUsers: activeUsers,
+      totalInstalls, searchesToday, wordsToday, quizzesToday,
+      averageQuizScore, uniqueWordsSaved, topWordType,
+      engagementRate, retentionRate,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Dashboard Timeline ───────────────────────────────────────────────
+app.get('/api/dashboard/timeline', requireFirebase, async (req, res) => {
+  try {
+    const days = 7;
+    const timeline = [];
+
+    const sinceTs = getDaysAgo(days - 1);
+
+    const [usersAll, searchesAll, wordsAll, quizzesAll] = await Promise.all([
+      db.collection('users').where('createdAt', '>=', sinceTs).get(),
+      db.collection('search_events').where('timestamp', '>=', sinceTs).get(),
+      db.collectionGroup('words').where('timestamp', '>=', sinceTs).get(),
+      db.collectionGroup('quizzes').where('timestamp', '>=', sinceTs).get(),
+    ]);
+
+    const usersByDay = countByDay(usersAll.docs.map(d => ({ timestamp: d.data().createdAt })));
+    const searchesByDay = countByDay(searchesAll.docs.map(d => ({ timestamp: d.data().timestamp })));
+    const wordsByDay = countByDay(wordsAll.docs.map(d => ({ timestamp: d.data().timestamp })));
+    const quizzesByDay = countByDay(quizzesAll.docs.map(d => ({ timestamp: d.data().timestamp })));
+
+    let activeUsersByDay = {};
+    try {
+      const activeSnap = await db.collection('users')
+        .where('lastActive', '>=', sinceTs).get();
+      activeUsersByDay = countByDay(activeSnap.docs.map(d => ({ timestamp: d.data().lastActive })));
+    } catch (e) { /* ignore */ }
+
+    for (let i = days - 1; i >= 0; i--) {
+      const dayTs = getDaysAgo(i);
+      const nextDayTs = dayTs + 86400000;
+      let newUsers = 0;
+      for (const [ts, count] of Object.entries(usersByDay)) {
+        const n = parseInt(ts);
+        if (n >= dayTs && n < nextDayTs) newUsers += count;
+      }
+      timeline.push({
+        date: new Date(dayTs).toISOString().split('T')[0],
+        label: formatDateLabel(dayTs),
+        users: activeUsersByDay[dayTs] || 0,
+        activeUsers: activeUsersByDay[dayTs] || 0,
+        searches: searchesByDay[dayTs] || 0,
+        words: wordsByDay[dayTs] || 0,
+        quizzes: quizzesByDay[dayTs] || 0,
+        newUsers,
+      });
+    }
+
+    res.json({ timeline });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Dashboard Top Words ──────────────────────────────────────────────
+app.get('/api/dashboard/top-words', requireFirebase, async (req, res) => {
+  try {
+    const snap = await db.collectionGroup('words').limit(2000).get();
+    const wordCounts = {};
+    const wordData = {};
+    for (const d of snap.docs) {
+      const data = d.data();
+      const w = data.word?.toLowerCase();
+      if (!w) continue;
+      wordCounts[w] = (wordCounts[w] || 0) + 1;
+      if (!wordData[w]) wordData[w] = { type: data.type };
+    }
+    const top = Object.entries(wordCounts)
+      .map(([word, count]) => ({ word, count, type: wordData[word]?.type }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 20);
+    res.json({ topWords: top });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Dashboard Top Searches ───────────────────────────────────────────
+app.get('/api/dashboard/top-searches', requireFirebase, async (req, res) => {
+  try {
+    const snap = await db.collection('search_events').limit(2000).get();
+    const wordCounts = {};
+    const userSets = {};
+    for (const d of snap.docs) {
+      const data = d.data();
+      const w = data.word?.toLowerCase();
+      if (!w) continue;
+      wordCounts[w] = (wordCounts[w] || 0) + 1;
+      if (!userSets[w]) userSets[w] = new Set();
+      if (data.user_id) userSets[w].add(data.user_id);
+    }
+    const top = Object.entries(wordCounts)
+      .map(([word, count]) => ({ word, count, users: userSets[word]?.size || 0 }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 20);
+    res.json({ topSearches: top });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Recent Activity ──────────────────────────────────────────────────
+app.get('/api/dashboard/recent-activity', requireFirebase, async (req, res) => {
+  try {
+    const activities = [];
+
+    const recentUsersSnap = await db.collection('users')
+      .orderBy('createdAt', 'desc').limit(5).get();
+    for (const d of recentUsersSnap.docs) {
+      const data = d.data();
+      activities.push({
+        type: 'user_signup',
+        userId: d.id,
+        username: data.username || data.email?.split('@')[0] || 'Unknown',
+        timestamp: data.createdAt || 0,
+      });
+    }
+
+    const recentWordsSnap = await db.collectionGroup('words')
+      .orderBy('timestamp', 'desc').limit(5).get();
+    for (const d of recentWordsSnap.docs) {
+      const data = d.data();
+      activities.push({
+        type: 'word_saved',
+        userId: d.ref.parent.parent?.id || '',
+        username: '',
+        word: data.word,
+        timestamp: data.timestamp || 0,
+      });
+    }
+
+    const recentQuizzesSnap = await db.collectionGroup('quizzes')
+      .orderBy('timestamp', 'desc').limit(5).get();
+    for (const d of recentQuizzesSnap.docs) {
+      const data = d.data();
+      activities.push({
+        type: 'quiz_taken',
+        userId: d.ref.parent.parent?.id || '',
+        username: '',
+        score: data.score,
+        timestamp: data.timestamp || 0,
+      });
+    }
+
+    activities.sort((a, b) => b.timestamp - a.timestamp);
+    res.json({ activities: activities.slice(0, 15) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Dashboard Word Type Distribution ─────────────────────────────────
+app.get('/api/dashboard/word-types', requireFirebase, async (req, res) => {
+  try {
+    const snap = await db.collectionGroup('words').limit(2000).get();
+    const typeCounts = {};
+    let total = 0;
+    for (const d of snap.docs) {
+      const type = d.data().type;
+      if (!type) continue;
+      typeCounts[type] = (typeCounts[type] || 0) + 1;
+      total++;
+    }
+    const distribution = Object.entries(typeCounts)
+      .map(([type, count]) => ({ type, count, percentage: total > 0 ? Math.round((count / total) * 100 * 10) / 10 : 0 }))
+      .sort((a, b) => b.count - a.count);
+    res.json({ distribution });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -99,7 +349,37 @@ app.get('/api/dashboard', requireFirebase, async (req, res) => {
 app.get('/api/users', requireFirebase, async (req, res) => {
   try {
     const snap = await db.collection('users').orderBy('lastActive', 'desc').limit(100).get();
-    const users = snap.docs.map(d => ({ uid: d.id, ...d.data(), lastActive: d.data().lastActive || 0 }));
+
+    const userIds = snap.docs.map(d => d.id);
+    const wordCounts = {};
+    const quizCounts = {};
+    const avgScores = {};
+
+    await Promise.all(userIds.map(async (uid) => {
+      try {
+        const [wordsSnap, quizzesSnap] = await Promise.all([
+          db.collection('users').doc(uid).collection('words').count().get(),
+          db.collection('users').doc(uid).collection('quizzes').get(),
+        ]);
+        wordCounts[uid] = wordsSnap.data().count || 0;
+        const qData = quizzesSnap.docs.map(d => d.data().score).filter(Boolean);
+        quizCounts[uid] = qData.length;
+        avgScores[uid] = qData.length > 0 ? Math.round(qData.reduce((a, b) => a + b, 0) / qData.length) : 0;
+      } catch (e) {
+        wordCounts[uid] = 0;
+        quizCounts[uid] = 0;
+        avgScores[uid] = 0;
+      }
+    }));
+
+    const users = snap.docs.map(d => ({
+      uid: d.id,
+      ...d.data(),
+      lastActive: d.data().lastActive || 0,
+      wordCount: wordCounts[d.id] || 0,
+      quizCount: quizCounts[d.id] || 0,
+      averageScore: avgScores[d.id] || 0,
+    }));
     res.json({ users });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -112,13 +392,15 @@ app.get('/api/users/:uid', requireFirebase, async (req, res) => {
     const userDoc = await db.collection('users').doc(uid).get();
     if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
 
-    const wordsSnap = await db.collection('users').doc(uid).collection('words').get();
-    const quizzesSnap = await db.collection('users').doc(uid).collection('quizzes').get();
+    const [wordsSnap, quizzesSnap] = await Promise.all([
+      db.collection('users').doc(uid).collection('words').orderBy('timestamp', 'desc').limit(100).get(),
+      db.collection('users').doc(uid).collection('quizzes').orderBy('timestamp', 'desc').limit(50).get(),
+    ]);
 
     res.json({
       profile: { uid, ...userDoc.data() },
-      words: wordsSnap.docs.map(d => d.data()),
-      quizzes: quizzesSnap.docs.map(d => d.data()),
+      words: wordsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+      quizzes: quizzesSnap.docs.map(d => ({ id: d.id, ...d.data() })),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -130,6 +412,46 @@ app.delete('/api/users/:uid', requireFirebase, async (req, res) => {
     await admin.auth().deleteUser(req.params.uid);
     await db.collection('users').doc(req.params.uid).delete();
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Users Stats ──────────────────────────────────────────────────────
+app.get('/api/users/stats', requireFirebase, async (req, res) => {
+  try {
+    const todayStart = getDayStart();
+    const weekAgo = getDaysAgo(7);
+    const monthAgo = getDaysAgo(30);
+
+    const [
+      totalSnap, newTodaySnap, newWeekSnap, newMonthSnap,
+      activeSnap, inactiveSnap,
+    ] = await Promise.all([
+      db.collection('users').count().get(),
+      db.collection('users').where('createdAt', '>=', todayStart).count().get(),
+      db.collection('users').where('createdAt', '>=', weekAgo).count().get(),
+      db.collection('users').where('createdAt', '>=', monthAgo).count().get(),
+      db.collection('users').where('status', '==', 'active').count().get(),
+      db.collection('users').where('status', '==', 'inactive').count().get(),
+    ]);
+
+    const byVersion = {};
+    const versionSnap = await db.collection('users').get();
+    for (const d of versionSnap.docs) {
+      const v = d.data().app_version || 'unknown';
+      byVersion[v] = (byVersion[v] || 0) + 1;
+    }
+
+    res.json({
+      newToday: newTodaySnap.data().count || 0,
+      thisWeek: newWeekSnap.data().count || 0,
+      thisMonth: newMonthSnap.data().count || 0,
+      total: totalSnap.data().count || 0,
+      active: activeSnap.data().count || 0,
+      inactive: inactiveSnap.data().count || 0,
+      byVersion,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -150,12 +472,102 @@ app.get('/api/words', requireFirebase, async (req, res) => {
   }
 });
 
+app.delete('/api/words/:id', requireFirebase, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const snap = await db.collectionGroup('words').where('__name__', '==', id).get();
+    for (const d of snap.docs) {
+      await d.ref.delete();
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Words Stats ──────────────────────────────────────────────────────
+app.get('/api/words/stats', requireFirebase, async (req, res) => {
+  try {
+    const todayStart = getDayStart();
+    const [
+      totalSnap, todaySnap, weekSnap,
+    ] = await Promise.all([
+      db.collectionGroup('words').count().get(),
+      db.collectionGroup('words').where('timestamp', '>=', todayStart).count().get(),
+      db.collectionGroup('words').where('timestamp', '>=', getDaysAgo(7)).count().get(),
+    ]);
+
+    const allSnap = await db.collectionGroup('words').limit(2000).get();
+    const typeCounts = {};
+    const uniqueWords = new Set();
+    for (const d of allSnap.docs) {
+      const data = d.data();
+      if (data.word) uniqueWords.add(data.word.toLowerCase());
+      if (data.type) typeCounts[data.type] = (typeCounts[data.type] || 0) + 1;
+    }
+
+    const typeDistribution = Object.entries(typeCounts)
+      .map(([type, count]) => ({ type, count, percentage: Math.round((count / allSnap.docs.length) * 100 * 10) / 10 }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      total: totalSnap.data().count || 0,
+      today: todaySnap.data().count || 0,
+      thisWeek: weekSnap.data().count || 0,
+      uniqueWords: uniqueWords.size,
+      typeDistribution,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Searches ─────────────────────────────────────────────────────────
 app.get('/api/searches', requireFirebase, async (req, res) => {
   try {
     const snap = await db.collection('search_events').orderBy('timestamp', 'desc').limit(200).get();
     const searches = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     res.json({ searches });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Searches Stats ───────────────────────────────────────────────────
+app.get('/api/searches/stats', requireFirebase, async (req, res) => {
+  try {
+    const todayStart = getDayStart();
+    const weekAgo = getDaysAgo(7);
+
+    const [totalSnap, todaySnap, weekSnap] = await Promise.all([
+      db.collection('search_events').count().get(),
+      db.collection('search_events').where('timestamp', '>=', todayStart).count().get(),
+      db.collection('search_events').where('timestamp', '>=', weekAgo).count().get(),
+    ]);
+
+    const recentSnap = await db.collection('search_events')
+      .where('timestamp', '>=', weekAgo).get();
+    const uniqueWords = new Set();
+    const topCounts = {};
+    for (const d of recentSnap.docs) {
+      const w = d.data().word?.toLowerCase();
+      if (!w) continue;
+      uniqueWords.add(w);
+      topCounts[w] = (topCounts[w] || 0) + 1;
+    }
+
+    const topSearches = Object.entries(topCounts)
+      .map(([word, count]) => ({ word, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 20);
+
+    res.json({
+      total: totalSnap.data().count || 0,
+      today: todaySnap.data().count || 0,
+      thisWeek: weekSnap.data().count || 0,
+      uniqueWords: uniqueWords.size,
+      topSearches,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -176,7 +588,57 @@ app.get('/api/quizzes', requireFirebase, async (req, res) => {
   }
 });
 
-// ── App Config (Kill Switch, Maintenance, Updates) ───────────────────
+// ── Quizzes Stats ────────────────────────────────────────────────────
+app.get('/api/quizzes/stats', requireFirebase, async (req, res) => {
+  try {
+    const todayStart = getDayStart();
+
+    const [totalSnap, todaySnap] = await Promise.all([
+      db.collectionGroup('quizzes').count().get(),
+      db.collectionGroup('quizzes').where('timestamp', '>=', todayStart).count().get(),
+    ]);
+
+    const allSnap = await db.collectionGroup('quizzes').limit(1000).get();
+    const scores = allSnap.docs.map(d => d.data().score).filter(s => s !== undefined && s !== null);
+    const participants = new Set();
+    for (const d of allSnap.docs) {
+      const uid = d.ref.parent.parent?.id;
+      if (uid) participants.add(uid);
+    }
+
+    const avg = scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : 0;
+    const highest = scores.length > 0 ? Math.max(...scores) : 0;
+    const lowest = scores.length > 0 ? Math.min(...scores) : 0;
+
+    const scoreDistribution = [];
+    for (let i = 0; i < 10; i++) {
+      const lower = i * 10;
+      const upper = (i + 1) * 10;
+      const count = scores.filter(s => s >= lower && s < upper).length;
+      if (count > 0) scoreDistribution.push({ range: `${lower}-${upper === 100 ? '100' : upper - 1}`, count });
+    }
+    const hundredCount = scores.filter(s => s === 100).length;
+    if (hundredCount > 0) {
+      const existing = scoreDistribution.find(r => r.range === '90-99');
+      if (existing) existing.count += hundredCount;
+      else scoreDistribution.push({ range: '90-100', count: hundredCount });
+    }
+
+    res.json({
+      total: totalSnap.data().count || 0,
+      today: todaySnap.data().count || 0,
+      averageScore: avg,
+      highestScore: highest,
+      lowestScore: lowest,
+      totalParticipants: participants.size,
+      scoreDistribution,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── App Config ───────────────────────────────────────────────────────
 app.get('/api/app-config', requireFirebase, async (req, res) => {
   try {
     const doc = await db.collection('current_version').doc('config').get();
@@ -192,6 +654,12 @@ app.get('/api/app-config', requireFirebase, async (req, res) => {
       maintenanceTitle: 'Under Maintenance',
       maintenanceMessage: 'We\'ll be back soon!',
       maintenanceEstimatedTime: '',
+      dailyQuizLimit: 3,
+      dailyWordLimit: 20,
+      enableNotifications: true,
+      enableLeaderboard: true,
+      enableBackup: true,
+      adsEnabled: false,
     };
     res.json(config);
   } catch (e) {
@@ -214,27 +682,45 @@ const notificationHistory = [];
 app.post('/api/admin/send-notification', requireFirebase, async (req, res) => {
   try {
     const { title, message, targetUserId } = req.body;
+    let sentCount = 0;
 
     if (targetUserId && targetUserId !== 'all') {
       const userDoc = await db.collection('users').doc(targetUserId).get();
       const token = userDoc.data()?.fcm_token;
       if (token) {
         await messaging.send({ notification: { title, body: message }, token });
+        sentCount++;
       }
     } else {
       const usersSnap = await db.collection('users').where('status', '==', 'active').get();
       const tokens = usersSnap.docs.map(d => d.data().fcm_token).filter(Boolean);
       if (tokens.length > 0) {
-        await messaging.sendEach(tokens.map(token => ({
+        const resp = await messaging.sendEach(tokens.map(token => ({
           notification: { title, body: message }, token,
         })));
+        sentCount = resp.successCount || tokens.length;
       }
     }
 
-    notificationHistory.unshift({ title, message, target: targetUserId || 'all', sentAt: Date.now(), success: true });
-    res.json({ success: true, sentCount: 1 });
+    notificationHistory.unshift({
+      id: Date.now().toString(),
+      title, message,
+      target: targetUserId || 'all',
+      sentAt: Date.now(),
+      success: true,
+      sentCount,
+      deliveredCount: sentCount,
+    });
+    res.json({ success: true, sentCount });
   } catch (e) {
-    notificationHistory.unshift({ title: req.body.title, message: req.body.message, error: e.message, sentAt: Date.now(), success: false });
+    notificationHistory.unshift({
+      id: Date.now().toString(),
+      title: req.body.title,
+      message: req.body.message,
+      error: e.message,
+      sentAt: Date.now(),
+      success: false,
+    });
     res.status(500).json({ error: e.message });
   }
 });
@@ -243,7 +729,7 @@ app.get('/api/admin/notifications', (req, res) => {
   res.json({ notifications: notificationHistory.slice(0, 50) });
 });
 
-// ── Experiences (Website Feedback) ───────────────────────────────────
+// ── Experiences ──────────────────────────────────────────────────────
 app.get('/api/experiences', requireFirebase, async (req, res) => {
   try {
     const snap = await db.collection('experiences').orderBy('timestamp', 'desc').limit(50).get();
@@ -272,7 +758,7 @@ app.delete('/api/admin/experiences/:id', requireFirebase, async (req, res) => {
   }
 });
 
-// ── FCM Token Registration (App integration) ─────────────────────────
+// ── FCM Token Registration ──────────────────────────────────────────
 app.post('/api/register-fcm', requireFirebase, async (req, res) => {
   try {
     const { userId, fcmToken } = req.body;
@@ -284,7 +770,7 @@ app.post('/api/register-fcm', requireFirebase, async (req, res) => {
   }
 });
 
-// ── User Registration (App integration) ──────────────────────────────
+// ── User Registration ───────────────────────────────────────────────
 app.post('/api/register', requireFirebase, async (req, res) => {
   try {
     const { userId } = req.body;
@@ -306,7 +792,7 @@ app.post('/api/register', requireFirebase, async (req, res) => {
   }
 });
 
-// ── Word Analysis (App integration - backward compat) ────────────────
+// ── Word Analysis ────────────────────────────────────────────────────
 app.post('/api/analyze', async (req, res) => {
   const { word, user_id } = req.body;
   try {
@@ -338,7 +824,7 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
-// ── AI Generation (App integration) ──────────────────────────────────
+// ── AI Generation ────────────────────────────────────────────────────
 app.post('/api/generate', async (req, res) => {
   const { word, user_id } = req.body;
   try {
@@ -363,7 +849,7 @@ app.post('/api/generate', async (req, res) => {
   }
 });
 
-// ── App Notifications (App integration) ──────────────────────────────
+// ── App Notifications ────────────────────────────────────────────────
 app.get('/api/notifications', requireFirebase, async (req, res) => {
   try {
     const userId = req.query.userId;
@@ -388,7 +874,7 @@ app.post('/api/notifications/read', requireFirebase, async (req, res) => {
   }
 });
 
-// ── Install analytics (App integration) ──────────────────────────────
+// ── Install analytics ────────────────────────────────────────────────
 app.get('/api/install-analytics', requireFirebase, async (req, res) => {
   try {
     const usersSnap = await db.collection('users').get();
