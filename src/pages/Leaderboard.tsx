@@ -117,13 +117,18 @@ export default function Leaderboard() {
   const [sortBy, setSortBy] = useState('rank');
 
   useEffect(() => {
-    fetch(`${window.location.origin}/api/admin/leaderboard`)
-      .then(r => r.json())
-      .then(data => {
-        setEntries(data.leaderboard ?? []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+    const load = () => {
+      fetch(`${window.location.origin}/api/admin/leaderboard`)
+        .then(r => r.json())
+        .then(data => {
+          setEntries(data.leaderboard ?? []);
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    };
+    load();
+    const interval = setInterval(load, 7000);
+    return () => clearInterval(interval);
   }, []);
 
   const filtered = entries.filter(e => {

@@ -232,24 +232,29 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([
-      fetch(`${window.location.origin}/api/dashboard`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/dashboard/timeline`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/dashboard/top-words`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/dashboard/top-searches`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/dashboard/word-types`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/dashboard/recent-activity`).then(r => r.json()),
-    ])
-      .then(([statsData, timelineData, wordsData, searchesData, typesData, activityData]) => {
-        setStats(statsData);
-        setTimeline(timelineData.timeline || []);
-        setTopWords(wordsData.topWords || []);
-        setTopSearches(searchesData.topSearches || []);
-        setWordTypes(typesData.distribution || []);
-        setActivity(activityData.activities || []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+    const load = () => {
+      Promise.all([
+        fetch(`${window.location.origin}/api/dashboard`).then(r => r.json()),
+        fetch(`${window.location.origin}/api/dashboard/timeline`).then(r => r.json()),
+        fetch(`${window.location.origin}/api/dashboard/top-words`).then(r => r.json()),
+        fetch(`${window.location.origin}/api/dashboard/top-searches`).then(r => r.json()),
+        fetch(`${window.location.origin}/api/dashboard/word-types`).then(r => r.json()),
+        fetch(`${window.location.origin}/api/dashboard/recent-activity`).then(r => r.json()),
+      ])
+        .then(([statsData, timelineData, wordsData, searchesData, typesData, activityData]) => {
+          setStats(statsData);
+          setTimeline(timelineData.timeline || []);
+          setTopWords(wordsData.topWords || []);
+          setTopSearches(searchesData.topSearches || []);
+          setWordTypes(typesData.distribution || []);
+          setActivity(activityData.activities || []);
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    };
+    load();
+    const interval = setInterval(load, 7000);
+    return () => clearInterval(interval);
   }, []);
 
   if (loading) {

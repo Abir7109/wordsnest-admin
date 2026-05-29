@@ -12,14 +12,19 @@ export default function Words() {
   const [expanded, setExpanded] = useState(null);
 
   useEffect(() => {
-    Promise.all([
-      fetch(`${window.location.origin}/api/words`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/words/stats`).then(r => r.json()),
-    ]).then(([wordsData, statsData]) => {
-      setWords(wordsData.words ?? []);
-      setStats(statsData);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    const load = () => {
+      Promise.all([
+        fetch(`${window.location.origin}/api/words`).then(r => r.json()),
+        fetch(`${window.location.origin}/api/words/stats`).then(r => r.json()),
+      ]).then(([wordsData, statsData]) => {
+        setWords(wordsData.words ?? []);
+        setStats(statsData);
+        setLoading(false);
+      }).catch(() => setLoading(false));
+    };
+    load();
+    const interval = setInterval(load, 7000);
+    return () => clearInterval(interval);
   }, []);
 
   const wordTypes = stats?.typeDistribution?.map(t => t.type) || [];

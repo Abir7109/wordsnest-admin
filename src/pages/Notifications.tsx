@@ -33,6 +33,8 @@ export default function Notifications() {
 
   useEffect(() => {
     refreshHistory();
+    const interval = setInterval(refreshHistory, 7000);
+    return () => clearInterval(interval);
   }, []);
 
   const refreshHistory = () => {

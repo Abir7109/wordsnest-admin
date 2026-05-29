@@ -29,14 +29,19 @@ export default function Searches() {
   }
 
   useEffect(() => {
-    Promise.all([
-      fetch(`${window.location.origin}/api/searches`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/searches/stats`).then(r => r.json()),
-    ]).then(([data, statsData]) => {
-      setSearches(data.searches ?? []);
-      setStats(statsData);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    const load = () => {
+      Promise.all([
+        fetch(`${window.location.origin}/api/searches`).then(r => r.json()),
+        fetch(`${window.location.origin}/api/searches/stats`).then(r => r.json()),
+      ]).then(([data, statsData]) => {
+        setSearches(data.searches ?? []);
+        setStats(statsData);
+        setLoading(false);
+      }).catch(() => setLoading(false));
+    };
+    load();
+    const interval = setInterval(load, 7000);
+    return () => clearInterval(interval);
   }, []);
 
   const q = searchTerm.toLowerCase();

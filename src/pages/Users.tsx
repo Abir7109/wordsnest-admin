@@ -146,13 +146,18 @@ export default function Users() {
   const [sortBy, setSortBy] = useState('lastActive');
 
   useEffect(() => {
-    fetch(`${window.location.origin}/api/users`)
-      .then(r => r.json())
-      .then(data => {
-        setUsers(data.users ?? []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+    const load = () => {
+      fetch(`${window.location.origin}/api/users`)
+        .then(r => r.json())
+        .then(data => {
+          setUsers(data.users ?? []);
+          setLoading(false);
+        })
+        .catch(() => setLoading(false));
+    };
+    load();
+    const interval = setInterval(load, 7000);
+    return () => clearInterval(interval);
   }, []);
 
   const versions = [...new Set(users.map(u => u.app_version).filter(Boolean))];
