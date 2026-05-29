@@ -1011,8 +1011,8 @@ app.post('/api/generate', async (req, res) => {
 
 // ── AI Word Enrichment ──────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2 || '';
+const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY || '';
+const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2 || process.env.GROK_API_KEY_2 || '';
 const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
 
 async function callGemini(prompt) {
@@ -1029,10 +1029,10 @@ async function callGemini(prompt) {
         }),
       }
     );
-    if (!res.ok) return null;
+    if (!res.ok) { console.error(`Gemini error: ${res.status} ${await res.text()}`); return null; }
     const data = await res.json();
     return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
-  } catch { return null; }
+  } catch (e) { console.error('Gemini exception:', e.message); return null; }
 }
 
 async function callGroq(apiKey, prompt) {
@@ -1051,10 +1051,10 @@ async function callGroq(apiKey, prompt) {
         max_tokens: 800,
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) { console.error(`Groq error (${apiKey.slice(0,8)}...): ${res.status} ${await res.text()}`); return null; }
     const data = await res.json();
     return data?.choices?.[0]?.message?.content || null;
-  } catch { return null; }
+  } catch (e) { console.error('Groq exception:', e.message); return null; }
 }
 
 function parseAiResponse(text) {
