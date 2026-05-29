@@ -23,8 +23,8 @@ export default function Quizzes() {
   useEffect(() => {
     fetch(`${window.location.origin}/api/quizzes`)
       .then((r) => r.json())
-      .then((data) => {
-        setQuizzes(Array.isArray(data) ? data : data?.data ?? []);
+      .then((data: { quizzes: QuizEvent[] }) => {
+        setQuizzes(data.quizzes ?? []);
       })
       .catch(console.error)
       .finally(() => setLoading(false));

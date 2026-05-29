@@ -38,8 +38,8 @@ export default function Users() {
   useEffect(() => {
     fetch(`${window.location.origin}/api/users`)
       .then((res) => res.json())
-      .then((data: UserProfile[]) => {
-        setUsers(data);
+      .then((data: { users: UserProfile[] }) => {
+        setUsers(data.users ?? []);
         setLoading(false);
       })
       .catch(() => setLoading(false));

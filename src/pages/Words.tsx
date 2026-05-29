@@ -39,8 +39,8 @@ export default function Words() {
   useEffect(() => {
     fetch(`${window.location.origin}/api/words`)
       .then((res) => res.json())
-      .then((data: WordRow[]) => {
-        setWords(data);
+      .then((data: { words: WordRow[] }) => {
+        setWords(data.words ?? []);
         setLoading(false);
       })
       .catch(() => setLoading(false));

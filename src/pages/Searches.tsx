@@ -48,8 +48,8 @@ export default function Searches() {
   useEffect(() => {
     fetch(`${window.location.origin}/api/searches`)
       .then((res) => res.json())
-      .then((data: SearchEvent[]) => {
-        setSearches(data);
+      .then((data: { searches: SearchEvent[] }) => {
+        setSearches(data.searches ?? []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
