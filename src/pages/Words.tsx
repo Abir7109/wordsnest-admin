@@ -24,8 +24,17 @@ export default function Words() {
 
   const wordTypes = stats?.typeDistribution?.map(t => t.type) || [];
 
+  const normalize = w => ({
+    ...w,
+    word: w.word || '(unknown)',
+    synonyms: Array.isArray(w.synonyms) ? w.synonyms : (w.synonyms ? w.synonyms.split(', ').filter(Boolean) : []),
+    antonyms: Array.isArray(w.antonyms) ? w.antonyms : (w.antonyms ? w.antonyms.split(', ').filter(Boolean) : []),
+  });
+
+  const normalized = words.map(normalize);
+
   const q = search.toLowerCase();
-  const filtered = words.filter(w => {
+  const filtered = normalized.filter(w => {
     if (typeFilter !== 'all' && w.type !== typeFilter) return false;
     if (!search) return true;
     return w.word?.toLowerCase().includes(q) || w.userId?.toLowerCase().includes(q) || w.definition?.toLowerCase().includes(q);
