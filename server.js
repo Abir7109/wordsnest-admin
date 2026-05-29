@@ -815,6 +815,95 @@ app.post('/api/generate', async (req, res) => {
   }
 });
 
+// ── AI Word Enrichment ──────────────────────────────────────────────
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GROK_API_KEY = process.env.GROK_API_KEY || '';
+
+async function callGemini(prompt) {
+  if (!GEMINI_API_KEY) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 800 },
+        }),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+  } catch { return null; }
+}
+
+async function callGrok(prompt) {
+  if (!GROK_API_KEY) return null;
+  try {
+    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GROK_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'grok-2-latest',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 800,
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content || null;
+  } catch { return null; }
+}
+
+function parseAiResponse(text) {
+  try {
+    const cleaned = text.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch {
+    // Try to extract JSON from markdown
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch {}
+    }
+    return null;
+  }
+}
+
+app.post('/api/enrich-word', async (req, res) => {
+  const { word } = req.body;
+  if (!word) return res.status(400).json({ error: 'Word is required' });
+
+  const prompt = `You are a dictionary assistant. Given the word "${word}", return ONLY valid JSON (no markdown, no explanation) with this exact structure:
+{
+  "synonyms": ["synonym1", "synonym2", "synonym3", "synonym4", "synonym5"],
+  "antonyms": ["antonym1", "antonym2", "antonym3"],
+  "simpleSentence": "A short simple example sentence using the word ${word}.",
+  "complexSentence": "A longer complex sentence using ${word} that shows deeper context.",
+  "compoundSentence": "A compound sentence using ${word} with two independent clauses."
+}
+Make sure synonyms and antonyms are real English words that are actually synonymous/antonymous with "${word}". Return ONLY the JSON.`;
+
+  let aiText = await callGemini(prompt);
+  if (!aiText) {
+    aiText = await callGrok(prompt);
+  }
+
+  if (aiText) {
+    const parsed = parseAiResponse(aiText);
+    if (parsed) {
+      return res.json({ enriched: true, ...parsed });
+    }
+  }
+
+  res.json({ enriched: false, synonyms: [], antonyms: [], simpleSentence: '', complexSentence: '', compoundSentence: '' });
+});
+
 // ── App Notifications ────────────────────────────────────────────────
 app.get('/api/notifications', requireFirebase, async (req, res) => {
   try {
