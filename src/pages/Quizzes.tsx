@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Brain, TrendingUp, Users, BarChart3, Target, Award, Search, X } from 'lucide-react';
+import { Brain, TrendingUp, Users, BarChart3, Target, Award, Search, X, Trash2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 
 function timeAgo(ts) {
@@ -23,6 +23,12 @@ export default function Quizzes() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('newest');
+
+  function deleteQuiz(id) {
+    if (!window.confirm('Delete this quiz record?')) return;
+    fetch(`${window.location.origin}/api/quizzes/${id}`, { method: 'DELETE' })
+      .then(() => setQuizzes(prev => prev.filter(q => q.id !== id)));
+  }
 
   useEffect(() => {
     Promise.all([
@@ -177,6 +183,7 @@ export default function Quizzes() {
               <th className="p-3 font-medium">Score</th>
               <th className="p-3 font-medium">Date</th>
               <th className="p-3 font-medium">Time</th>
+              <th className="p-3 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -195,6 +202,12 @@ export default function Quizzes() {
                 </td>
                 <td className="p-3 text-[#897365] text-xs">{q.timestamp ? new Date(q.timestamp).toLocaleDateString() : '—'}</td>
                 <td className="p-3 text-[#897365] text-xs whitespace-nowrap">{timeAgo(q.timestamp)}</td>
+                <td className="p-3 text-right">
+                  <button onClick={() => deleteQuiz(q.id)}
+                    className="w-7 h-7 rounded-lg text-[#897365] hover:text-red-500 hover:bg-red-50 transition-colors inline-flex items-center justify-center">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </td>
               </motion.tr>
             ))}
           </tbody>

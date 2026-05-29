@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Search, TrendingUp, Hash, Users, Calendar, BarChart3, Globe } from 'lucide-react';
+import { Search, TrendingUp, Hash, Users, Calendar, BarChart3, Globe, Trash2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import type { SearchEvent, SearchStats } from '../types';
 
@@ -21,6 +21,12 @@ export default function Searches() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+
+  function deleteSearch(id) {
+    if (!window.confirm('Delete this search event?')) return;
+    fetch(`${window.location.origin}/api/searches/${id}`, { method: 'DELETE' })
+      .then(() => setSearches(prev => prev.filter(s => s.id !== id)));
+  }
 
   useEffect(() => {
     Promise.all([
@@ -110,6 +116,7 @@ export default function Searches() {
               <th className="p-3 font-medium">User ID</th>
               <th className="p-3 font-medium">Timestamp</th>
               <th className="p-3 font-medium">Status</th>
+              <th className="p-3 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -125,6 +132,12 @@ export default function Searches() {
                 <td className="p-3 text-[#897365] text-xs whitespace-nowrap">{s.timestamp ? new Date(s.timestamp).toLocaleString() : '—'}</td>
                 <td className="p-3">
                   <span className="text-[10px] text-[#897365]">{s.status || '—'}</span>
+                </td>
+                <td className="p-3 text-right">
+                  <button onClick={() => deleteSearch(s.id)}
+                    className="w-7 h-7 rounded-lg text-[#897365] hover:text-red-500 hover:bg-red-50 transition-colors inline-flex items-center justify-center">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </td>
               </motion.tr>
             ))}

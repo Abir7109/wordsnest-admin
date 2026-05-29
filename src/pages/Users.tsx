@@ -108,6 +108,25 @@ function UserDetailModal({ uid, onClose }) {
                 )}
               </div>
             </div>
+
+            {detail.searchHistory && (
+              <div>
+                <h3 className="text-sm font-semibold text-[#2A170F] mb-3 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-blue-500" /> Search History ({detail.searchHistory.length || 0})
+                </h3>
+                <div className="space-y-1.5 max-h-40 overflow-auto">
+                  {detail.searchHistory.map((s, i) => (
+                    <div key={s.id || i} className="flex items-center justify-between bg-[#F5F0EB] rounded-lg px-3 py-2 text-sm">
+                      <span className="font-medium text-[#2A170F]">{s.word}</span>
+                      <span className="text-[10px] text-[#897365]">{timeAgo(s.timestamp)}</span>
+                    </div>
+                  ))}
+                  {detail.searchHistory.length === 0 && (
+                    <p className="text-sm text-[#897365] py-2">No searches yet</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="p-8 text-center text-[#897365]">Failed to load user details</div>

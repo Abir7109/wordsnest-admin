@@ -381,15 +381,17 @@ app.get('/api/users/:uid', requireFirebase, async (req, res) => {
     const userDoc = await db.collection('users').doc(uid).get();
     if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
 
-    const [wordsSnap, quizzesSnap] = await Promise.all([
+    const [wordsSnap, quizzesSnap, searchHistorySnap] = await Promise.all([
       db.collection('users').doc(uid).collection('words').orderBy('timestamp', 'desc').limit(100).get(),
       db.collection('users').doc(uid).collection('quizzes').orderBy('timestamp', 'desc').limit(50).get(),
+      db.collection('users').doc(uid).collection('search_history').orderBy('timestamp', 'desc').limit(50).get(),
     ]);
 
     res.json({
       profile: { uid, ...userDoc.data() },
       words: wordsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
       quizzes: quizzesSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+      searchHistory: searchHistorySnap.docs.map(d => ({ id: d.id, ...d.data() })),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -507,7 +509,14 @@ app.get('/api/searches', requireFirebase, async (req, res) => {
   }
 });
 
-// ── Searches Stats ───────────────────────────────────────────────────
+app.delete('/api/searches/:id', requireFirebase, async (req, res) => {
+  try {
+    await db.collection('search_events').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.get('/api/searches/stats', requireFirebase, async (req, res) => {
   try {
     const todayStart = getDayStart();
@@ -552,6 +561,19 @@ app.get('/api/quizzes', requireFirebase, async (req, res) => {
     res.json({ quizzes });
   } catch {
     res.json({ quizzes: [] });
+  }
+});
+
+app.delete('/api/quizzes/:id', requireFirebase, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const snap = await db.collectionGroup('quizzes').where('__name__', '==', id).get();
+    for (const d of snap.docs) {
+      await d.ref.delete();
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -798,7 +820,6 @@ app.post('/api/app-config', requireFirebase, async (req, res) => {
 });
 
 // ── Notifications ────────────────────────────────────────────────────
-const notificationHistory = [];
 
 app.post('/api/admin/send-notification', requireFirebase, async (req, res) => {
   try {
@@ -823,7 +844,7 @@ app.post('/api/admin/send-notification', requireFirebase, async (req, res) => {
       }
     }
 
-    notificationHistory.unshift({
+    const notificationDoc = {
       id: Date.now().toString(),
       title, message,
       target: targetUserId || 'all',
@@ -831,23 +852,31 @@ app.post('/api/admin/send-notification', requireFirebase, async (req, res) => {
       success: true,
       sentCount,
       deliveredCount: sentCount,
-    });
+    };
+    await db.collection('notifications').add(notificationDoc);
     res.json({ success: true, sentCount });
   } catch (e) {
-    notificationHistory.unshift({
+    const notificationDoc = {
       id: Date.now().toString(),
       title: req.body.title,
       message: req.body.message,
       error: e.message,
       sentAt: Date.now(),
       success: false,
-    });
+    };
+    try { await db.collection('notifications').add(notificationDoc); } catch {}
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get('/api/admin/notifications', (req, res) => {
-  res.json({ notifications: notificationHistory.slice(0, 50) });
+app.get('/api/admin/notifications', requireFirebase, async (req, res) => {
+  try {
+    const snap = await db.collection('notifications').orderBy('sentAt', 'desc').limit(50).get();
+    const notifications = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json({ notifications });
+  } catch {
+    res.json({ notifications: [] });
+  }
 });
 
 // ── Experiences ──────────────────────────────────────────────────────
