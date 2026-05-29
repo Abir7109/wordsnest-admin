@@ -817,7 +817,8 @@ app.post('/api/generate', async (req, res) => {
 
 // ── AI Word Enrichment ──────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GROK_API_KEY = process.env.GROK_API_KEY || '';
+const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2 || '';
 
 async function callGemini(prompt) {
   if (!GEMINI_API_KEY) return null;
@@ -839,17 +840,17 @@ async function callGemini(prompt) {
   } catch { return null; }
 }
 
-async function callGrok(prompt) {
-  if (!GROK_API_KEY) return null;
+async function callGroq(apiKey, prompt) {
+  if (!apiKey) return null;
   try {
-    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GROK_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'grok-2-latest',
+        model: 'mixtral-8x7b-32768',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,
         max_tokens: 800,
@@ -891,7 +892,10 @@ Make sure synonyms and antonyms are real English words that are actually synonym
 
   let aiText = await callGemini(prompt);
   if (!aiText) {
-    aiText = await callGrok(prompt);
+    aiText = await callGroq(GROQ_API_KEY, prompt);
+  }
+  if (!aiText) {
+    aiText = await callGroq(GROQ_API_KEY_2, prompt);
   }
 
   if (aiText) {
