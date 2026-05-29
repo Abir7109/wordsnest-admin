@@ -660,6 +660,10 @@ app.get('/api/leaderboard', requireFirebase, async (req, res) => {
     for (const d of usersSnap.docs) {
       const data = d.data();
       const uid = d.id;
+
+      // Skip anonymous v1.x users with no username or email
+      if (!data.username && !data.email) continue;
+
       const searches = searchCounts[uid] || 0;
       const quizScore = quizTotals[uid] || 0;
       const wordsSaved = wordCounts[uid] || 0;
@@ -729,6 +733,10 @@ app.get('/api/admin/leaderboard', requireFirebase, async (req, res) => {
     for (const d of usersSnap.docs) {
       const data = d.data();
       const uid = d.id;
+
+      // Skip anonymous v1.x users with no username or email
+      if (!data.username && !data.email) continue;
+
       const searches = searchCounts[uid] || 0;
       const quizScore = quizTotals[uid] || 0;
       const wordsSaved = wordCounts[uid] || 0;
