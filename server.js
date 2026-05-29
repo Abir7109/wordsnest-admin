@@ -687,6 +687,7 @@ app.get('/api/leaderboard', requireFirebase, async (req, res) => {
         quiz: quizScore,
         streak,
         isUser: uid === currentUid,
+        isAdmin: data.email === ADMIN_EMAIL,
         lastActive: data.lastActive || 0,
         email: data.email || '',
       });
@@ -761,6 +762,7 @@ app.get('/api/admin/leaderboard', requireFirebase, async (req, res) => {
         searches,
         quiz: quizScore,
         streak,
+        isAdmin: data.email === ADMIN_EMAIL,
         lastActive: data.lastActive || 0,
         email: data.email || '',
       });
@@ -1011,6 +1013,7 @@ app.post('/api/generate', async (req, res) => {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2 || '';
+const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
 
 async function callGemini(prompt) {
   if (!GEMINI_API_KEY) return null;
