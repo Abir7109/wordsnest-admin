@@ -110,6 +110,10 @@ export interface AppConfig {
   adsEnabled: boolean;
   apiEndpoint?: string;
   featureFlags?: Record<string, boolean>;
+  aiProvider?: string;
+  aiModel?: string;
+  aiGeminiModel?: string;
+  aiEnabled?: boolean;
 }
 
 export interface NotificationItem {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Save, RefreshCw, AlertTriangle, Smartphone, Bell, Shield, Database, Eye, EyeOff, Wifi, Users, Zap } from 'lucide-react';
+import { Save, RefreshCw, AlertTriangle, Smartphone, Bell, Shield, Database, Eye, EyeOff, Wifi, Users, Zap, Sparkles } from 'lucide-react';
 import type { AppConfig } from '../types';
 
 export default function AppControl() {
@@ -225,6 +225,60 @@ export default function AppControl() {
                   {config.forceUpdate ? `Force updating to v${config.currentVersion}. ` : ''}
                   {config.underMaintenance ? 'Maintenance mode is ON. ' : 'App is live. '}
                   {config.isAppAlive ? 'Kill switch is OFF.' : 'KILL SWITCH IS ON!'}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-5 space-y-5">
+          <div className="flex items-center gap-2 pb-3 border-b border-[#E8DDD0]">
+            <Sparkles className="w-4 h-4 text-indigo-500" />
+            <h2 className="text-sm font-bold text-[#2A170F]">AI Enrichment</h2>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-[#2A170F]">AI Enrichment</p>
+              <p className="text-xs text-[#897365]">Generate synonyms, antonyms & sentences via AI</p>
+            </div>
+            <Toggle value={config.aiEnabled !== false} onChange={v => update('aiEnabled', v)} />
+          </div>
+
+          <div>
+            <label className="text-xs text-[#897365] font-medium">AI Provider</label>
+            <select value={config.aiProvider || 'groq_first'}
+              onChange={e => update('aiProvider', e.target.value)}
+              className="w-full mt-1 px-3 py-2 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]">
+              <option value="groq_first">Groq (primary) → Gemini (fallback)</option>
+              <option value="gemini">Gemini only</option>
+              <option value="groq">Groq only</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-[#897365] font-medium">Groq Model</label>
+              <input type="text" value={config.aiModel || 'mixtral-8x7b-32768'}
+                onChange={e => update('aiModel', e.target.value)}
+                className="w-full mt-1 px-3 py-2 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]" />
+            </div>
+            <div>
+              <label className="text-xs text-[#897365] font-medium">Gemini Model</label>
+              <input type="text" value={config.aiGeminiModel || 'gemini-2.0-flash'}
+                onChange={e => update('aiGeminiModel', e.target.value)}
+                className="w-full mt-1 px-3 py-2 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]" />
+            </div>
+          </div>
+
+          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-xs font-medium text-indigo-700">AI Service Status</p>
+                <p className="text-[10px] text-indigo-600 mt-0.5">
+                  API keys are set via Render environment variables (GROQ_API_KEY, GROQ_API_KEY_2, GEMINI_API_KEY).
+                  Provider and model can be changed here. Save after editing.
                 </p>
               </div>
             </div>

@@ -813,6 +813,10 @@ app.get('/api/app-config', requireFirebase, async (req, res) => {
       enableLeaderboard: true,
       enableBackup: true,
       adsEnabled: false,
+      aiProvider: 'groq_first',
+      aiModel: 'mixtral-8x7b-32768',
+      aiGeminiModel: 'gemini-2.0-flash',
+      aiEnabled: true,
     };
     res.json(config);
   } catch (e) {
@@ -1015,11 +1019,34 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY || '';
 const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2 || process.env.GROK_API_KEY_2 || '';
 const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
 
-async function callGemini(prompt) {
+console.log(`AI Enrichment: GROQ_API_KEY=${GROQ_API_KEY ? '✅ set (' + GROQ_API_KEY.slice(0, 8) + '...)' : '❌ not set'}, GROQ_API_KEY_2=${GROQ_API_KEY_2 ? '✅ set' : '❌ not set'}, GEMINI_API_KEY=${GEMINI_API_KEY ? '✅ set' : '❌ not set'}`);
+
+async function getAiConfig() {
+  if (!firebaseReady) {
+    return { aiProvider: 'groq_first', aiModel: 'mixtral-8x7b-32768', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+  }
+  try {
+    const doc = await db.collection('current_version').doc('config').get();
+    if (doc.exists) {
+      const data = doc.data();
+      return {
+        aiProvider: data.aiProvider || 'groq_first',
+        aiModel: data.aiModel || 'mixtral-8x7b-32768',
+        aiGeminiModel: data.aiGeminiModel || 'gemini-2.0-flash',
+        aiEnabled: data.aiEnabled !== false,
+      };
+    }
+  } catch (e) {
+    console.error('Failed to read AI config:', e.message);
+  }
+  return { aiProvider: 'groq_first', aiModel: 'mixtral-8x7b-32768', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+}
+
+async function callGemini(prompt, model = 'gemini-2.0-flash') {
   if (!GEMINI_API_KEY) return null;
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1035,7 +1062,7 @@ async function callGemini(prompt) {
   } catch (e) { console.error('Gemini exception:', e.message); return null; }
 }
 
-async function callGroq(apiKey, prompt) {
+async function callGroq(apiKey, prompt, model = 'mixtral-8x7b-32768') {
   if (!apiKey) return null;
   try {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -1045,7 +1072,7 @@ async function callGroq(apiKey, prompt) {
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'mixtral-8x7b-32768',
+        model: model,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,
         max_tokens: 800,
@@ -1066,7 +1093,6 @@ function parseAiResponse(text) {
     const cleaned = text.replace(/```json|```/g, '').trim();
     return JSON.parse(cleaned);
   } catch {
-    // Try to extract JSON from markdown
     const match = text.match(/\{[\s\S]*\}/);
     if (match) {
       try { return JSON.parse(match[0]); } catch {}
@@ -1079,6 +1105,11 @@ app.post('/api/enrich-word', async (req, res) => {
   const { word } = req.body;
   if (!word) return res.status(400).json({ error: 'Word is required' });
 
+  const aiConfig = await getAiConfig();
+  if (!aiConfig.aiEnabled) {
+    return res.json({ enriched: false, synonyms: [], antonyms: [], simpleSentence: '', complexSentence: '', compoundSentence: '' });
+  }
+
   const prompt = `You are a dictionary assistant. Given the word "${word}", return ONLY valid JSON (no markdown, no explanation) with this exact structure:
 {
   "synonyms": ["synonym1", "synonym2", "synonym3", "synonym4", "synonym5"],
@@ -1089,12 +1120,17 @@ app.post('/api/enrich-word', async (req, res) => {
 }
 Make sure synonyms and antonyms are real English words that are actually synonymous/antonymous with "${word}". Keep sentences natural and educational. Return ONLY the JSON.`;
 
-  let aiText = await callGemini(prompt);
-  if (!aiText) {
-    aiText = await callGroq(GROQ_API_KEY, prompt);
-  }
-  if (!aiText) {
-    aiText = await callGroq(GROQ_API_KEY_2, prompt);
+  let aiText = null;
+  if (aiConfig.aiProvider === 'gemini') {
+    aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+  } else if (aiConfig.aiProvider === 'groq') {
+    aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+    if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
+  } else {
+    // groq_first: try Gemini first, fallback to Groq
+    aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+    if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+    if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
   }
 
   if (aiText) {
