@@ -259,7 +259,7 @@ export default function AppControl() {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-[#897365] font-medium">Groq Model</label>
-              <input type="text" value={config.aiModel || 'mixtral-8x7b-32768'}
+              <input type="text" value={config.aiModel || 'llama-3.3-70b-versatile'}
                 onChange={e => update('aiModel', e.target.value)}
                 className="w-full mt-1 px-3 py-2 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]" />
             </div>

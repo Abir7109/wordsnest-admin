@@ -814,7 +814,7 @@ app.get('/api/app-config', requireFirebase, async (req, res) => {
       enableBackup: true,
       adsEnabled: false,
       aiProvider: 'groq',
-      aiModel: 'mixtral-8x7b-32768',
+      aiModel: 'llama-3.3-70b-versatile',
       aiGeminiModel: 'gemini-2.0-flash',
       aiEnabled: true,
     };
@@ -1023,7 +1023,7 @@ console.log(`AI Enrichment: GROQ_API_KEY=${GROQ_API_KEY ? '✅ set (' + GROQ_API
 
 async function getAiConfig() {
   if (!firebaseReady) {
-    return { aiProvider: 'groq', aiModel: 'mixtral-8x7b-32768', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+    return { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
   }
   try {
     const doc = await db.collection('current_version').doc('config').get();
@@ -1031,7 +1031,7 @@ async function getAiConfig() {
       const data = doc.data();
       return {
         aiProvider: data.aiProvider || 'groq',
-        aiModel: data.aiModel || 'mixtral-8x7b-32768',
+        aiModel: data.aiModel || 'llama-3.3-70b-versatile',
         aiGeminiModel: data.aiGeminiModel || 'gemini-2.0-flash',
         aiEnabled: data.aiEnabled !== false,
       };
@@ -1039,7 +1039,7 @@ async function getAiConfig() {
   } catch (e) {
     console.error('Failed to read AI config:', e.message);
   }
-  return { aiProvider: 'groq', aiModel: 'mixtral-8x7b-32768', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+  return { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
 }
 
 async function callGemini(prompt, model = 'gemini-2.0-flash') {
@@ -1062,7 +1062,7 @@ async function callGemini(prompt, model = 'gemini-2.0-flash') {
   } catch (e) { console.error('Gemini exception:', e.message); return null; }
 }
 
-async function callGroq(apiKey, prompt, model = 'mixtral-8x7b-32768') {
+async function callGroq(apiKey, prompt, model = 'llama-3.3-70b-versatile') {
   if (!apiKey) return null;
   try {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
