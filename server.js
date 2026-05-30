@@ -1040,6 +1040,242 @@ app.post('/api/generate', async (req, res) => {
   }
 });
 
+// ── AI Quiz Generation ────────────────────────────────────────────────
+app.post('/api/ai/generate-quiz', requireFirebase, async (req, res) => {
+  try {
+    const { count = 5 } = req.body;
+    const aiConfig = await getAiConfig();
+    if (!aiConfig.aiEnabled) return res.status(400).json({ error: 'AI not enabled' });
+
+    // Fetch recent searched words
+    const searchSnap = await db.collection('search_events')
+      .orderBy('timestamp', 'desc').limit(50).get();
+    const words = [...new Set(searchSnap.docs.map(d => d.data().word).filter(Boolean))].slice(0, 20);
+    if (words.length < 3) return res.status(400).json({ error: 'Not enough searched words to generate quiz. Need at least 3.' });
+
+    const prompt = `You are a quiz generator. Based on these words that users have recently searched: ${words.join(', ')}, generate a vocabulary quiz.
+
+Return ONLY valid JSON array (no markdown, no explanation) with exactly ${count} objects, each having:
+{
+  "word": "the vocabulary word",
+  "question": "A clear multiple-choice question about this word's meaning, synonym, antonym, or usage",
+  "options": ["correct answer", "wrong1", "wrong2", "wrong3"],
+  "correctIndex": 0,
+  "hint": "A brief helpful hint about the word"
+}
+
+Rules:
+- Use REAL words from the provided list whenever possible
+- correctIndex MUST be 0 (the correct answer is always the first option)
+- Options should be shuffled but correct is always index 0 in the JSON
+- Make questions varied (definitions, synonyms, antonyms, fill-in-the-blank, etymology)
+- Hints should be subtle, not give away the answer
+- Return ONLY the JSON array, nothing else`;
+
+    let aiText = null;
+    if (aiConfig.aiProvider === 'gemini') {
+      aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+    } else if (aiConfig.aiProvider === 'groq_first') {
+      if (GEMINI_API_KEY) aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
+    } else {
+      aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
+    }
+
+    if (!aiText) return res.status(500).json({ error: 'AI failed to generate quiz' });
+
+    let questions = parseAiResponse(aiText);
+    if (!questions || !Array.isArray(questions)) return res.status(500).json({ error: 'AI returned invalid format' });
+
+    // Validate and sanitize
+    questions = questions.slice(0, count).map((q, i) => ({
+      id: i + 1,
+      word: q.word || 'Unknown',
+      question: q.question || 'What does this word mean?',
+      options: Array.isArray(q.options) && q.options.length === 4 ? q.options : ['Answer', 'Wrong', 'Wrong', 'Wrong'],
+      correctIndex: 0,
+      hint: q.hint || 'Think about the word\'s meaning',
+    }));
+
+    // Store in quiz_pool
+    const batch = db.batch();
+    const poolRef = db.collection('quiz_pool');
+    const existing = await poolRef.get();
+    existing.docs.forEach(d => batch.delete(d.ref));
+    questions.forEach(q => batch.set(poolRef.doc(), { ...q, createdAt: Date.now() }));
+    await batch.commit();
+
+    res.json({ success: true, questions, generatedFrom: words });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/quiz-pool', async (req, res) => {
+  try {
+    const snap = await db.collection('quiz_pool').orderBy('createdAt', 'desc').limit(10).get();
+    const questions = snap.docs.map(d => ({ ...d.data() }));
+    res.json({ questions, count: questions.length });
+  } catch (e) {
+    res.json({ questions: [] });
+  }
+});
+
+// ── AI Notification Agent ─────────────────────────────────────────────
+app.post('/api/ai/notification-agent-config', requireFirebase, async (req, res) => {
+  try {
+    const { prompt, enabled, intervalMinutes, timeOfDay } = req.body;
+    if (!prompt?.trim()) return res.status(400).json({ error: 'Prompt is required' });
+    const config = {
+      prompt: prompt.trim(),
+      enabled: enabled !== false,
+      intervalMinutes: Math.max(1, Math.min(1440, intervalMinutes || 60)),
+      timeOfDay: timeOfDay || null,
+      updatedAt: Date.now(),
+      lastSentAt: 0,
+      nextSendAt: Date.now() + Math.max(1, Math.min(1440, intervalMinutes || 60)) * 60000,
+    };
+    await db.collection('current_version').doc('ai_notification_agent').set(config, { merge: true });
+    res.json({ success: true, config });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/ai/notification-agent-config', requireFirebase, async (req, res) => {
+  try {
+    const doc = await db.collection('current_version').doc('ai_notification_agent').get();
+    if (!doc.exists) return res.json({ enabled: false, prompt: '', intervalMinutes: 60, lastSentAt: 0, nextSendAt: 0 });
+    res.json({ ...doc.data() });
+  } catch (e) {
+    res.json({ enabled: false, prompt: '', intervalMinutes: 60, lastSentAt: 0, nextSendAt: 0 });
+  }
+});
+
+// ── AI Notification Scheduler ─────────────────────────────────────────
+const NOTIFICATION_CHECK_INTERVAL = 30000; // 30 seconds
+let notificationScheduler = null;
+
+async function checkAndSendAiNotification() {
+  if (!firebaseReady) return;
+  try {
+    const doc = await db.collection('current_version').doc('ai_notification_agent').get();
+    if (!doc.exists || !doc.data().enabled) return;
+    const config = doc.data();
+    const now = Date.now();
+
+    // Check if it's time to send
+    if (config.nextSendAt && now < config.nextSendAt) return;
+
+    // Check timeOfDay constraint if set
+    if (config.timeOfDay) {
+      const [hour, minute] = config.timeOfDay.split(':').map(Number);
+      const nowH = new Date().getHours();
+      const nowM = new Date().getMinutes();
+      // Only send within 5-minute window of the specified time
+      const targetMinutes = hour * 60 + minute;
+      const currentMinutes = nowH * 60 + nowM;
+      if (Math.abs(currentMinutes - targetMinutes) > 3) return;
+    }
+
+    // Build context for the AI
+    const userSnap = await db.collection('users').where('status', '==', 'active').get();
+    const activeUserCount = userSnap.size;
+    const lastHour = await db.collection('search_events')
+      .where('timestamp', '>', now - 3600000).get();
+    const recentWords = [...new Set(lastHour.docs.map(d => d.data().word).filter(Boolean))].slice(0, 10);
+
+    const contextPrompt = `You are an AI notification agent for a vocabulary learning app called "Words Nest". 
+Based on this configuration prompt: "${config.prompt}"
+
+Current context:
+- Active users: ${activeUserCount}
+- Recent words searched: ${recentWords.join(', ') || 'none in the last hour'}
+- Current time: ${new Date().toLocaleString()}
+
+Generate a push notification (title and message body) that follows the prompt's instructions.
+Return ONLY valid JSON (no markdown, no explanation) with:
+{
+  "title": "Short catchy title (max 50 chars)",
+  "message": "Engaging message body (max 150 chars)"
+}`;
+
+    let aiText = null;
+    const aiConfig = await getAiConfig();
+    if (aiConfig.aiProvider === 'gemini') {
+      aiText = await callGemini(contextPrompt, aiConfig.aiGeminiModel);
+    } else if (aiConfig.aiProvider === 'groq_first') {
+      if (GEMINI_API_KEY) aiText = await callGemini(contextPrompt, aiConfig.aiGeminiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY, contextPrompt, aiConfig.aiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, contextPrompt, aiConfig.aiModel);
+    } else {
+      aiText = await callGroq(GROQ_API_KEY, contextPrompt, aiConfig.aiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, contextPrompt, aiConfig.aiModel);
+    }
+
+    if (!aiText) return;
+
+    const parsed = parseAiResponse(aiText);
+    if (!parsed || !parsed.title || !parsed.message) return;
+
+    // Send the notification
+    const tokens = userSnap.docs.map(d => d.data().fcm_token).filter(Boolean);
+    let sentCount = 0;
+    if (tokens.length > 0) {
+      const resp = await messaging.sendEach(tokens.map(token => ({
+        notification: { title: parsed.title, body: parsed.message }, token,
+      })));
+      sentCount = resp.successCount || 0;
+    }
+
+    // Record the notification
+    await db.collection('notifications').add({
+      id: 'ai_' + Date.now().toString(),
+      title: parsed.title,
+      message: parsed.message,
+      target: 'ai_automation',
+      sentAt: now,
+      success: true,
+      sentCount,
+      deliveredCount: sentCount,
+      aiGenerated: true,
+      aiPrompt: config.prompt,
+    });
+
+    // Update next send time
+    await db.collection('current_version').doc('ai_notification_agent').update({
+      lastSentAt: now,
+      nextSendAt: now + config.intervalMinutes * 60000,
+    });
+  } catch (e) {
+    console.error('AI notification scheduler error:', e.message);
+  }
+}
+
+function startNotificationScheduler() {
+  if (notificationScheduler) clearInterval(notificationScheduler);
+  notificationScheduler = setInterval(checkAndSendAiNotification, NOTIFICATION_CHECK_INTERVAL);
+  console.log('AI Notification Scheduler started (checking every 30s)');
+  // Also check immediately after a short delay
+  setTimeout(checkAndSendAiNotification, 5000);
+}
+
+// Start the scheduler when Firebase is ready
+setTimeout(() => {
+  if (firebaseReady) {
+    startNotificationScheduler();
+  } else {
+    const waitForFirebase = setInterval(() => {
+      if (firebaseReady) {
+        clearInterval(waitForFirebase);
+        startNotificationScheduler();
+      }
+    }, 500);
+  }
+}, 2000);
+
 // ── AI Word Enrichment ──────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY || '';

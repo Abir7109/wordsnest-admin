@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Brain, TrendingUp, Users, BarChart3, Target, Award, Search, X, Trash2 } from 'lucide-react';
+import { Brain, TrendingUp, Users, BarChart3, Target, Award, Search, X, Trash2, Sparkles, CheckCircle, Loader, RefreshCw } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 
 function timeAgo(ts) {
@@ -23,6 +23,9 @@ export default function Quizzes() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('newest');
+  const [generating, setGenerating] = useState(false);
+  const [generatedQuestions, setGeneratedQuestions] = useState(null);
+  const [generateError, setGenerateError] = useState('');
 
   function deleteQuiz(id) {
     if (!window.confirm('Delete this quiz record?')) return;
@@ -56,6 +59,28 @@ export default function Quizzes() {
     if (sortBy === 'score') return (b.score || 0) - (a.score || 0);
     return 0;
   });
+
+  const generateQuiz = async () => {
+    setGenerating(true);
+    setGenerateError('');
+    setGeneratedQuestions(null);
+    try {
+      const res = await fetch(`${window.location.origin}/api/ai/generate-quiz`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: 5 }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setGeneratedQuestions(data.questions);
+      } else {
+        setGenerateError(data.error || 'Generation failed');
+      }
+    } catch (e) {
+      setGenerateError(e.message);
+    }
+    setGenerating(false);
+  };
 
   const getScoreColor = score => {
     if (score >= 80) return 'text-green-600';
@@ -164,6 +189,62 @@ export default function Quizzes() {
             })()}
           </div>
         </div>
+      </div>
+
+      {generatedQuestions && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-[#FFF8F0] to-[#FFFBF5] rounded-xl border border-[#D48A4A]/30 p-5 mb-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-[#D48A4A]" />
+              <h3 className="text-sm font-bold text-[#2A170F]">AI Generated Quiz</h3>
+            </div>
+            <button onClick={generateQuiz} disabled={generating}
+              className="text-xs text-[#AA7137] hover:text-[#D48A4A] font-medium flex items-center gap-1">
+              <RefreshCw className="w-3 h-3" /> Regenerate
+            </button>
+          </div>
+          <div className="space-y-3">
+            {generatedQuestions.map((q, i) => (
+              <div key={q.id || i} className="bg-white rounded-lg border border-[#E8DDD0] p-3">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="w-5 h-5 rounded-full bg-[#D48A4A]/10 text-[#AA7137] text-[10px] font-bold flex items-center justify-center">{i + 1}</span>
+                      <span className="text-xs font-bold text-[#D48A4A]">{q.word}</span>
+                    </div>
+                    <p className="text-xs text-[#2A170F]">{q.question}</p>
+                    <div className="mt-1.5 space-y-0.5">
+                      {q.options.map((opt, oi) => (
+                        <div key={oi} className={`text-[11px] px-2 py-0.5 rounded ${oi === q.correctIndex ? 'bg-green-50 text-green-700 font-medium' : 'text-[#897365]'}`}>
+                          {oi === q.correctIndex ? '✓ ' : ''}{opt}
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-[#BFA090] mt-1 italic">💡 {q.hint}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-4 mb-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-[#D48A4A]" />
+            <span className="text-xs font-semibold text-[#2A170F]">AI Quiz Generator</span>
+          </div>
+          <button onClick={generateQuiz} disabled={generating}
+            className="btn-primary text-xs px-4 py-2 inline-flex items-center gap-1.5">
+            {generating ? <><Loader className="w-3.5 h-3.5 animate-spin" /> Generating...</> : <><Sparkles className="w-3.5 h-3.5" /> Generate Quiz</>}
+          </button>
+        </div>
+        {generateError && <p className="text-xs text-red-500 mt-2">{generateError}</p>}
+        {!generatedQuestions && !generateError && (
+          <p className="text-[11px] text-[#897365] mt-2">Generate a vocabulary quiz from words users have searched recently.</p>
+        )}
       </div>
 
       <div className="flex items-center gap-3 mb-4">

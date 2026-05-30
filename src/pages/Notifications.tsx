@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Send, Bell, Clock, CheckCircle, XCircle, History, Users, Smartphone, Trash2, RefreshCw } from 'lucide-react';
+import { Send, Bell, Clock, CheckCircle, XCircle, History, Users, Smartphone, Trash2, RefreshCw, Sparkles, Settings, Play, Pause, Loader, Zap } from 'lucide-react';
 import type { NotificationItem } from '../types';
 
 function timeAgo(ts) {
@@ -30,12 +30,55 @@ export default function Notifications() {
   const [sending, setSending] = useState(false);
   const [history, setHistory] = useState([]);
   const [activeTab, setActiveTab] = useState('send');
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiInterval, setAiInterval] = useState(60);
+  const [aiTimeOfDay, setAiTimeOfDay] = useState('');
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiConfigLoading, setAiConfigLoading] = useState(true);
+  const [aiLastSent, setAiLastSent] = useState(0);
+  const [aiNextSend, setAiNextSend] = useState(0);
 
   useEffect(() => {
     refreshHistory();
+    loadAiConfig();
     const interval = setInterval(refreshHistory, 7000);
     return () => clearInterval(interval);
   }, []);
+
+  const loadAiConfig = async () => {
+    setAiConfigLoading(true);
+    try {
+      const res = await fetch(`${window.location.origin}/api/ai/notification-agent-config`);
+      const data = await res.json();
+      setAiPrompt(data.prompt || '');
+      setAiEnabled(data.enabled || false);
+      setAiInterval(data.intervalMinutes || 60);
+      setAiTimeOfDay(data.timeOfDay || '');
+      setAiLastSent(data.lastSentAt || 0);
+      setAiNextSend(data.nextSendAt || 0);
+    } catch (e) { console.error(e); }
+    setAiConfigLoading(false);
+  };
+
+  const saveAiConfig = async () => {
+    if (!aiPrompt.trim()) return;
+    setAiSaving(true);
+    try {
+      await fetch(`${window.location.origin}/api/ai/notification-agent-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: aiPrompt.trim(),
+          enabled: aiEnabled,
+          intervalMinutes: aiInterval,
+          timeOfDay: aiTimeOfDay || null,
+        }),
+      });
+      await loadAiConfig();
+    } catch (e) { console.error(e); }
+    setAiSaving(false);
+  };
 
   const refreshHistory = () => {
     fetch(`${window.location.origin}/api/admin/notifications`)
@@ -112,6 +155,10 @@ export default function Notifications() {
         <button onClick={() => setActiveTab('templates')}
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'templates' ? 'bg-[#AA7137] text-white shadow-sm' : 'text-[#897365] hover:text-[#2A170F]'}`}>
           <Bell className="w-3.5 h-3.5 inline mr-1.5" /> Templates
+        </button>
+        <button onClick={() => setActiveTab('ai')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'ai' ? 'bg-[#AA7137] text-white shadow-sm' : 'text-[#897365] hover:text-[#2A170F]'}`}>
+          <Sparkles className="w-3.5 h-3.5 inline mr-1.5" /> AI Automation
         </button>
       </div>
 
@@ -211,6 +258,88 @@ export default function Notifications() {
               <p className="text-[10px] text-[#AA7137] mt-2">Click to apply template</p>
             </motion.div>
           ))}
+        </div>
+      )}
+
+      {activeTab === 'ai' && (
+        <div className="max-w-2xl space-y-5">
+          <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-[#2A170F] flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#D48A4A]" /> AI Notification Agent
+                </h3>
+                <p className="text-xs text-[#897365] mt-0.5">The AI automatically sends notifications based on your prompt.</p>
+              </div>
+              <button onClick={() => setAiEnabled(!aiEnabled)}
+                className={`relative w-12 h-6 rounded-full transition-colors ${aiEnabled ? 'bg-[#D48A4A]' : 'bg-[#E8DDD0]'}`}>
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform ${aiEnabled ? 'translate-x-6' : ''}`} />
+              </button>
+            </div>
+
+            {aiConfigLoading ? (
+              <div className="text-center py-4 text-[#897365] text-sm"><Loader className="w-4 h-4 inline animate-spin mr-1" /> Loading config...</div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-medium text-[#897365] uppercase tracking-wider">Automation Prompt</label>
+                  <textarea value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
+                    placeholder="Describe when and what type of notifications the AI should send. e.g.: 'Send motivational vocabulary tips every morning at 9am. Include a word of the day with its meaning and an example sentence.'"
+                    className="w-full mt-1 px-4 py-3 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] placeholder-[#BFA090] outline-none focus:border-[#D48A4A] resize-none h-28" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-[#897365] uppercase tracking-wider">Interval (minutes)</label>
+                    <input type="number" value={aiInterval} onChange={e => setAiInterval(Math.max(1, parseInt(e.target.value) || 60))}
+                      min={1} max={1440}
+                      className="w-full mt-1 px-4 py-2.5 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-[#897365] uppercase tracking-wider">Time of day (optional)</label>
+                    <input type="time" value={aiTimeOfDay} onChange={e => setAiTimeOfDay(e.target.value)}
+                      className="w-full mt-1 px-4 py-2.5 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]" />
+                  </div>
+                </div>
+                <button onClick={saveAiConfig} disabled={aiSaving || !aiPrompt.trim()}
+                  className="btn-primary inline-flex items-center gap-2 text-sm">
+                  {aiSaving ? <><Loader className="w-4 h-4 animate-spin" /> Saving...</> : <><Settings className="w-4 h-4" /> Save Configuration</>}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-3">
+              <span className="text-xs text-[#897365] flex items-center gap-1"><Zap className="w-3 h-3" /> Status</span>
+              <p className={`text-lg font-bold mt-0.5 ${aiEnabled ? 'text-green-600' : 'text-[#897365]'}`}>
+                {aiEnabled ? 'Active' : 'Paused'}
+              </p>
+            </div>
+            <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-3">
+              <span className="text-xs text-[#897365] flex items-center gap-1"><History className="w-3 h-3" /> Last Sent</span>
+              <p className="text-lg font-bold text-[#2A170F] mt-0.5">{aiLastSent ? timeAgo(aiLastSent) : 'Never'}</p>
+            </div>
+            <div className="bg-[#FFFBF5] rounded-xl border border-[#E8DDD0] p-3">
+              <span className="text-xs text-[#897365] flex items-center gap-1"><Clock className="w-3 h-3" /> Next Send</span>
+              <p className="text-lg font-bold text-[#AA7137] mt-0.5">{aiNextSend > Date.now() ? timeAgo(aiNextSend) : 'Soon'}</p>
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-br from-[#FFF8F0] to-[#FFFBF5] rounded-xl border border-[#D48A4A]/20 p-4">
+            <p className="text-xs font-medium text-[#897365] mb-2">💡 Prompt Ideas</p>
+            <div className="space-y-1.5">
+              {[
+                'Send a vocabulary word of the day every morning at 9am with definition and example sentence.',
+                'Send quiz challenge reminders every 4 hours during daytime. Make them fun and encouraging.',
+                'Send streak encouragement notifications when users haven\'t been active for a day. Keep it warm and motivational.',
+              ].map((idea, i) => (
+                <button key={i} onClick={() => setAiPrompt(idea)}
+                  className="text-xs text-left text-[#897365] hover:text-[#2A170F] bg-white/50 hover:bg-white rounded-lg px-3 py-2 w-full transition-colors border border-[#E8DDD0]/50">
+                  {idea}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
