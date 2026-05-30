@@ -813,7 +813,7 @@ app.get('/api/app-config', requireFirebase, async (req, res) => {
       enableLeaderboard: true,
       enableBackup: true,
       adsEnabled: false,
-      aiProvider: 'groq_first',
+      aiProvider: 'groq',
       aiModel: 'mixtral-8x7b-32768',
       aiGeminiModel: 'gemini-2.0-flash',
       aiEnabled: true,
@@ -1023,14 +1023,14 @@ console.log(`AI Enrichment: GROQ_API_KEY=${GROQ_API_KEY ? '✅ set (' + GROQ_API
 
 async function getAiConfig() {
   if (!firebaseReady) {
-    return { aiProvider: 'groq_first', aiModel: 'mixtral-8x7b-32768', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+    return { aiProvider: 'groq', aiModel: 'mixtral-8x7b-32768', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
   }
   try {
     const doc = await db.collection('current_version').doc('config').get();
     if (doc.exists) {
       const data = doc.data();
       return {
-        aiProvider: data.aiProvider || 'groq_first',
+        aiProvider: data.aiProvider || 'groq',
         aiModel: data.aiModel || 'mixtral-8x7b-32768',
         aiGeminiModel: data.aiGeminiModel || 'gemini-2.0-flash',
         aiEnabled: data.aiEnabled !== false,
@@ -1039,7 +1039,7 @@ async function getAiConfig() {
   } catch (e) {
     console.error('Failed to read AI config:', e.message);
   }
-  return { aiProvider: 'groq_first', aiModel: 'mixtral-8x7b-32768', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+  return { aiProvider: 'groq', aiModel: 'mixtral-8x7b-32768', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
 }
 
 async function callGemini(prompt, model = 'gemini-2.0-flash') {
@@ -1123,13 +1123,13 @@ Make sure synonyms and antonyms are real English words that are actually synonym
   let aiText = null;
   if (aiConfig.aiProvider === 'gemini') {
     aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
-  } else if (aiConfig.aiProvider === 'groq') {
-    aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+  } else if (aiConfig.aiProvider === 'groq_first') {
+    if (GEMINI_API_KEY) aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+    if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
     if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
   } else {
-    // groq_first: try Gemini first, fallback to Groq
-    aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
-    if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+    // groq only (default)
+    aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
     if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
   }
 
