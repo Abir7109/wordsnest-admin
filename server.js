@@ -934,6 +934,33 @@ app.post('/api/register-fcm', requireFirebase, async (req, res) => {
   }
 });
 
+// ── Security Questions (Forgot Password) ──────────────────────────
+app.get('/api/auth/security-question', requireFirebase, async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    const snap = await db.collection('users').where('email', '==', email).limit(1).get();
+    if (snap.empty) return res.status(404).json({ error: 'User not found' });
+    const data = snap.docs[0].data();
+    if (!data.securityQuestion) return res.status(404).json({ error: 'No security question set' });
+    res.json({ question: data.securityQuestion, uid: snap.docs[0].id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/reset-password', requireFirebase, async (req, res) => {
+  try {
+    const { uid, newPassword } = req.body;
+    if (!uid || !newPassword) return res.status(400).json({ error: 'uid and newPassword required' });
+    if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be 6+ characters' });
+    await admin.auth().updateUser(uid, { password: newPassword });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── User Registration ───────────────────────────────────────────────
 app.post('/api/register', requireFirebase, async (req, res) => {
   try {

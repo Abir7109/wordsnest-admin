@@ -109,6 +109,16 @@ function UserDetailModal({ uid, onClose }) {
               </div>
             </div>
 
+            {detail.profile?.securityQuestion && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <h3 className="text-sm font-semibold text-[#2A170F] mb-2 flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-amber-600" /> Security Question
+                </h3>
+                <p className="text-sm text-[#564337] font-medium">{detail.profile.securityQuestion}</p>
+                <p className="text-xs text-[#897365] mt-1">Answer hash: {detail.profile.securityAnswerHash ? detail.profile.securityAnswerHash.substring(0, 16) + '...' : '—'}</p>
+              </div>
+            )}
+
             {detail.searchHistory && (
               <div>
                 <h3 className="text-sm font-semibold text-[#2A170F] mb-3 flex items-center gap-2">
