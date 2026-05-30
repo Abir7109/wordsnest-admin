@@ -1082,6 +1082,8 @@ Rules:
     let aiText = null;
     if (aiConfig.aiProvider === 'gemini') {
       aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
     } else if (aiConfig.aiProvider === 'groq_first') {
       if (GEMINI_API_KEY) aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
       if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
@@ -1225,6 +1227,8 @@ Return ONLY valid JSON (no markdown, no explanation) with:
     const aiConfig = await getAiConfig();
     if (aiConfig.aiProvider === 'gemini') {
       aiText = await callGemini(contextPrompt, aiConfig.aiGeminiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY, contextPrompt, aiConfig.aiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, contextPrompt, aiConfig.aiModel);
     } else if (aiConfig.aiProvider === 'groq_first') {
       if (GEMINI_API_KEY) aiText = await callGemini(contextPrompt, aiConfig.aiGeminiModel);
       if (!aiText) aiText = await callGroq(GROQ_API_KEY, contextPrompt, aiConfig.aiModel);
@@ -1405,6 +1409,8 @@ Make sure synonyms and antonyms are real English words that are actually synonym
   let aiText = null;
   if (aiConfig.aiProvider === 'gemini') {
     aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+    if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+    if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
   } else if (aiConfig.aiProvider === 'groq_first') {
     if (GEMINI_API_KEY) aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
     if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
