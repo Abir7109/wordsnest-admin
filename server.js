@@ -1043,17 +1043,24 @@ app.post('/api/generate', async (req, res) => {
 // ── AI Quiz Generation ────────────────────────────────────────────────
 app.post('/api/ai/generate-quiz', requireFirebase, async (req, res) => {
   try {
-    const { count = 5 } = req.body;
+    const { count = 5, difficulty = 'medium' } = req.body;
     const aiConfig = await getAiConfig();
     if (!aiConfig.aiEnabled) return res.status(400).json({ error: 'AI not enabled' });
 
-    // Fetch recent searched words
     const searchSnap = await db.collection('search_events')
       .orderBy('timestamp', 'desc').limit(50).get();
     const words = [...new Set(searchSnap.docs.map(d => d.data().word).filter(Boolean))].slice(0, 20);
     if (words.length < 3) return res.status(400).json({ error: 'Not enough searched words to generate quiz. Need at least 3.' });
 
+    const difficultyPrompt = difficulty === 'easy'
+      ? 'Make questions about basic word definitions, suitable for beginners.'
+      : difficulty === 'hard'
+      ? 'Make challenging questions about nuanced meanings, antonyms, context usage, and etymology.'
+      : 'Mix easy and challenging questions about definitions, synonyms, and usage.';
+
     const prompt = `You are a quiz generator. Based on these words that users have recently searched: ${words.join(', ')}, generate a vocabulary quiz.
+
+${difficultyPrompt}
 
 Return ONLY valid JSON array (no markdown, no explanation) with exactly ${count} objects, each having:
 {
@@ -1116,10 +1123,22 @@ Rules:
 app.get('/api/quiz-pool', async (req, res) => {
   try {
     const snap = await db.collection('quiz_pool').orderBy('createdAt', 'desc').limit(10).get();
-    const questions = snap.docs.map(d => ({ ...d.data() }));
+    const questions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     res.json({ questions, count: questions.length });
   } catch (e) {
     res.json({ questions: [] });
+  }
+});
+
+app.get('/api/quiz-pool/status', async (req, res) => {
+  try {
+    const snap = await db.collection('quiz_pool').orderBy('createdAt', 'desc').limit(10).get();
+    if (snap.empty) return res.json({ hasQuiz: false, count: 0, generatedAt: null });
+    const docs = snap.docs.map(d => d.data());
+    const createdAt = docs[0]?.createdAt || null;
+    res.json({ hasQuiz: true, count: docs.length, generatedAt: createdAt, generatedWords: docs.map(d => d.word) });
+  } catch (e) {
+    res.json({ hasQuiz: false, count: 0, generatedAt: null });
   }
 });
 
