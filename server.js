@@ -813,7 +813,7 @@ app.get('/api/app-config', requireFirebase, async (req, res) => {
       enableLeaderboard: true,
       enableBackup: true,
       adsEnabled: false,
-      aiProvider: 'gemini',
+      aiProvider: 'groq',
       aiModel: 'llama-3.3-70b-versatile',
       aiGeminiModel: 'gemini-2.0-flash',
       aiEnabled: true,
@@ -1300,7 +1300,7 @@ setTimeout(() => {
 }, 2000);
 
 // ── AI Word Enrichment ──────────────────────────────────────────────
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyDXfdTlMXl5SfXlUxpIq0SOM3z6DQwuyUw';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY || '';
 const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2 || process.env.GROK_API_KEY_2 || '';
 const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
@@ -1309,14 +1309,14 @@ console.log(`AI Enrichment: GROQ_API_KEY=${GROQ_API_KEY ? '✅ set (' + GROQ_API
 
 async function getAiConfig() {
   if (!firebaseReady) {
-    return { aiProvider: 'gemini', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+    return { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
   }
   try {
     const doc = await db.collection('current_version').doc('config').get();
     if (doc.exists) {
       const data = doc.data();
       return {
-        aiProvider: data.aiProvider || 'gemini',
+        aiProvider: data.aiProvider || 'groq',
         aiModel: data.aiModel || 'llama-3.3-70b-versatile',
         aiGeminiModel: data.aiGeminiModel || 'gemini-2.0-flash',
         aiEnabled: data.aiEnabled !== false,
@@ -1325,7 +1325,7 @@ async function getAiConfig() {
   } catch (e) {
     console.error('Failed to read AI config:', e.message);
   }
-  return { aiProvider: 'gemini', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+  return { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
 }
 
 async function callGemini(prompt, model = 'gemini-2.0-flash') {
