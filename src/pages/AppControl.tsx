@@ -247,12 +247,12 @@ export default function AppControl() {
 
           <div>
             <label className="text-xs text-[#897365] font-medium">AI Provider</label>
-            <select value={config.aiProvider || 'groq'}
+            <select value={config.aiProvider || 'gemini'}
               onChange={e => update('aiProvider', e.target.value)}
               className="w-full mt-1 px-3 py-2 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]">
+              <option value="gemini">Gemini only</option>
               <option value="groq">Groq only</option>
               <option value="groq_first">Groq → Gemini (fallback)</option>
-              <option value="gemini">Gemini only</option>
             </select>
           </div>
 
