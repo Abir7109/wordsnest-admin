@@ -1095,8 +1095,12 @@ Rules:
 
     if (!aiText) return res.status(500).json({ error: 'AI failed to generate quiz' });
 
+    console.error('RAW AI TEXT:', aiText?.slice(0, 500));
     let questions = parseAiResponse(aiText);
-    if (!questions || !Array.isArray(questions)) return res.status(500).json({ error: 'AI returned invalid format' });
+    if (!questions || !Array.isArray(questions)) {
+      console.error('PARSE FAILED for text:', aiText?.slice(0, 300));
+      return res.status(500).json({ error: 'AI returned invalid format' });
+    }
 
     // Validate, sanitize and shuffle
     questions = questions.slice(0, count).map((q, i) => {
@@ -1393,13 +1397,21 @@ function parseAiResponse(text) {
   try {
     const cleaned = text.replace(/```json|```/g, '').trim();
     return JSON.parse(cleaned);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      try { return JSON.parse(match[0]); } catch {}
+  } catch {}
+  try {
+    const arrMatch = text.match(/\[[\s\S]*\]/);
+    if (arrMatch) return JSON.parse(arrMatch[0]);
+  } catch {}
+  try {
+    const objMatch = text.match(/\{[\s\S]*\}/);
+    if (objMatch) {
+      const obj = JSON.parse(objMatch[0]);
+      for (const key of Object.keys(obj)) {
+        if (Array.isArray(obj[key])) return obj[key];
+      }
     }
-    return null;
-  }
+  } catch {}
+  return null;
 }
 
 app.post('/api/enrich-word', async (req, res) => {
