@@ -1098,15 +1098,19 @@ Rules:
     let questions = parseAiResponse(aiText);
     if (!questions || !Array.isArray(questions)) return res.status(500).json({ error: 'AI returned invalid format' });
 
-    // Validate and sanitize
-    questions = questions.slice(0, count).map((q, i) => ({
-      id: i + 1,
-      word: q.word || 'Unknown',
-      question: q.question || 'What does this word mean?',
-      options: Array.isArray(q.options) && q.options.length === 4 ? q.options : ['Answer', 'Wrong', 'Wrong', 'Wrong'],
-      correctIndex: 0,
-      hint: q.hint || 'Think about the word\'s meaning',
-    }));
+    // Validate, sanitize and shuffle
+    questions = questions.slice(0, count).map((q, i) => {
+      const opts = Array.isArray(q.options) && q.options.length === 4 ? q.options : ['Answer', 'Wrong', 'Wrong', 'Wrong'];
+      const shuffled = shuffleOptions(opts, 0);
+      return {
+        id: i + 1,
+        word: q.word || 'Unknown',
+        question: q.question || 'What does this word mean?',
+        options: shuffled.options,
+        correctIndex: shuffled.correctIndex,
+        hint: q.hint || 'Think about the word\'s meaning',
+      };
+    });
 
     // Store in quiz_pool
     const batch = db.batch();
@@ -1372,6 +1376,17 @@ async function callGroq(apiKey, prompt, model = 'llama-3.3-70b-versatile') {
     console.error(`Groq error (${apiKey.slice(0,8)}...): ${res.status} ${errBody}`);
     return null;
   } catch (e) { console.error('Groq exception:', e.message); return null; }
+}
+
+function shuffleOptions(options, correctIndex) {
+  const correct = options[correctIndex];
+  const shuffled = [...options];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  const newIndex = shuffled.indexOf(correct);
+  return { options: shuffled, correctIndex: newIndex };
 }
 
 function parseAiResponse(text) {
