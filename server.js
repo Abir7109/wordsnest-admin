@@ -28,7 +28,6 @@ const aiLimiter = rateLimit({
   message: { error: 'Too many AI requests, please try again later' },
 });
 app.use('/api/ai/', aiLimiter);
-app.use('/api/notifications/', aiLimiter);
 
 let admin, db, messaging;
 let firebaseReady = false;
