@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
@@ -12,6 +13,22 @@ const PORT = process.env.PORT || 10000;
 
 app.use(cors());
 app.use(express.json());
+
+// ── Rate Limiting ────────────────────────────────────────────────────
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests, please try again later' },
+});
+app.use('/api/', globalLimiter);
+
+const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many AI requests, please try again later' },
+});
+app.use('/api/ai/', aiLimiter);
+app.use('/api/notifications/', aiLimiter);
 
 let admin, db, messaging;
 let firebaseReady = false;
@@ -159,13 +176,7 @@ app.get('/api/dashboard', requireFirebase, async (req, res) => {
       engagementRate, retentionRate,
     });
   } catch (e) {
-    res.json({
-      users: 0, activeUsers: 0, searches: 0, words: 0, quizzes: 0,
-      newUsersToday: 0, dailyActiveUsers: 0, totalInstalls: 0,
-      searchesToday: 0, wordsToday: 0, quizzesToday: 0,
-      averageQuizScore: 0, uniqueWordsSaved: 0, topWordType: 'N/A',
-      engagementRate: 0, retentionRate: 0,
-    });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -351,7 +362,7 @@ app.get('/api/users', requireFirebase, async (req, res) => {
           db.collection('users').doc(uid).collection('quizzes').get(),
         ]);
         wordCounts[uid] = wordsSnap.data().count || 0;
-        const qData = quizzesSnap.docs.map(d => d.data().score).filter(Boolean);
+        const qData = quizzesSnap.docs.map(d => d.data().score).filter(s => s !== undefined && s !== null);
         quizCounts[uid] = qData.length;
         avgScores[uid] = qData.length > 0 ? Math.round(qData.reduce((a, b) => a + b, 0) / qData.length) : 0;
       } catch (e) {
@@ -387,8 +398,9 @@ app.get('/api/users/:uid', requireFirebase, async (req, res) => {
       db.collection('users').doc(uid).collection('search_history').orderBy('timestamp', 'desc').limit(50).get(),
     ]);
 
+    const { securityAnswerHash, ...safeProfile } = { uid, ...userDoc.data() };
     res.json({
-      profile: { uid, ...userDoc.data() },
+      profile: safeProfile,
       words: wordsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
       quizzes: quizzesSnap.docs.map(d => ({ id: d.id, ...d.data() })),
       searchHistory: searchHistorySnap.docs.map(d => ({ id: d.id, ...d.data() })),
@@ -432,8 +444,8 @@ app.get('/api/users/stats', requireFirebase, async (req, res) => {
     }
 
     res.json({ newToday, thisWeek, thisMonth, total, active, inactive, byVersion });
-  } catch {
-    res.json({ newToday: 0, thisWeek: 0, thisMonth: 0, total: 0, active: 0, inactive: 0, byVersion: {} });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -447,8 +459,8 @@ app.get('/api/words', requireFirebase, async (req, res) => {
       ...d.data(),
     }));
     res.json({ words });
-  } catch {
-    res.json({ words: [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -493,8 +505,8 @@ app.get('/api/words/stats', requireFirebase, async (req, res) => {
       uniqueWords: uniqueWords.size,
       typeDistribution,
     });
-  } catch {
-    res.json({ total: 0, today: 0, thisWeek: 0, uniqueWords: 0, typeDistribution: [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -544,8 +556,8 @@ app.get('/api/searches/stats', requireFirebase, async (req, res) => {
       .slice(0, 20);
 
     res.json({ total, today, thisWeek, uniqueWords: uniqueWords.size, topSearches });
-  } catch {
-    res.json({ total: 0, today: 0, thisWeek: 0, uniqueWords: 0, topSearches: [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -559,8 +571,8 @@ app.get('/api/quizzes', requireFirebase, async (req, res) => {
       ...d.data(),
     }));
     res.json({ quizzes });
-  } catch {
-    res.json({ quizzes: [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -621,8 +633,8 @@ app.get('/api/quizzes/stats', requireFirebase, async (req, res) => {
       totalParticipants: participants.size,
       scoreDistribution,
     });
-  } catch {
-    res.json({ total: 0, today: 0, averageScore: 0, highestScore: 0, lowestScore: 0, totalParticipants: 0, scoreDistribution: [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -632,10 +644,10 @@ app.get('/api/leaderboard', requireFirebase, async (req, res) => {
     const currentUid = req.query.uid || '';
 
     const [usersSnap, searchSnap, wordsSnap, quizzesSnap] = await Promise.all([
-      db.collection('users').get(),
-      db.collection('search_events').get(),
-      db.collectionGroup('words').get(),
-      db.collectionGroup('quizzes').get(),
+      db.collection('users').limit(5000).get(),
+      db.collection('search_events').limit(50000).get(),
+      db.collectionGroup('words').limit(50000).get(),
+      db.collectionGroup('quizzes').limit(50000).get(),
     ]);
 
     const searchCounts = {};
@@ -706,10 +718,10 @@ app.get('/api/leaderboard', requireFirebase, async (req, res) => {
 app.get('/api/admin/leaderboard', requireFirebase, async (req, res) => {
   try {
     const [usersSnap, searchSnap, wordsSnap, quizzesSnap] = await Promise.all([
-      db.collection('users').get(),
-      db.collection('search_events').get(),
-      db.collectionGroup('words').get(),
-      db.collectionGroup('quizzes').get(),
+      db.collection('users').limit(5000).get(),
+      db.collection('search_events').limit(50000).get(),
+      db.collectionGroup('words').limit(50000).get(),
+      db.collectionGroup('quizzes').limit(50000).get(),
     ]);
 
     const searchCounts = {};
@@ -798,12 +810,12 @@ app.get('/api/app-config', requireFirebase, async (req, res) => {
     const config = doc.exists ? doc.data() : {
       isAppAlive: true,
       underMaintenance: false,
-      forceUpdate: true,
-      softUpdate: true,
-      currentVersion: '2.0.0',
-      minRequiredVersion: '2.0.0',
+      forceUpdate: false,
+      softUpdate: false,
+      currentVersion: '1.4.2',
+      minRequiredVersion: '1.4.2',
       updateUrl: 'https://wordsnests.netlify.app/wordsnest-v2.0.0.apk',
-      updateMessage: 'A major update is here! Words Nest 2.0.0 brings a redesigned UI, real-time cloud sync, and smarter learning tools.',
+      updateMessage: 'A new version is available! Words Nest 2.0.0 brings a redesigned UI, real-time cloud sync, and smarter learning tools.',
       maintenanceTitle: 'Under Maintenance',
       maintenanceMessage: 'We\'ll be back soon!',
       maintenanceEstimatedTime: '',
@@ -859,19 +871,17 @@ app.post('/api/admin/send-notification', requireFirebase, async (req, res) => {
     }
 
     const notificationDoc = {
-      id: Date.now().toString(),
-      title, message,
-      target: targetUserId || 'all',
+      title: req.body.title,
+      message: req.body.message,
       sentAt: Date.now(),
       success: true,
-      sentCount,
+      readCount: 0,
       deliveredCount: sentCount,
     };
     await db.collection('notifications').add(notificationDoc);
     res.json({ success: true, sentCount });
   } catch (e) {
     const notificationDoc = {
-      id: Date.now().toString(),
       title: req.body.title,
       message: req.body.message,
       error: e.message,
@@ -951,9 +961,16 @@ app.get('/api/auth/security-question', requireFirebase, async (req, res) => {
 
 app.post('/api/auth/reset-password', requireFirebase, async (req, res) => {
   try {
-    const { uid, newPassword } = req.body;
+    const { uid, newPassword, securityAnswerHash } = req.body;
     if (!uid || !newPassword) return res.status(400).json({ error: 'uid and newPassword required' });
     if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be 6+ characters' });
+    if (!securityAnswerHash) return res.status(400).json({ error: 'Security answer verification required' });
+    const userDoc = await db.collection('users').doc(uid).get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+    const userData = userDoc.data();
+    if (userData.securityAnswerHash && userData.securityAnswerHash !== securityAnswerHash) {
+      return res.status(403).json({ error: 'Incorrect security answer' });
+    }
     await admin.auth().updateUser(uid, { password: newPassword });
     res.json({ success: true });
   } catch (e) {
@@ -984,7 +1001,7 @@ app.post('/api/register', requireFirebase, async (req, res) => {
 });
 
 // ── Word Analysis ────────────────────────────────────────────────────
-app.post('/api/analyze', async (req, res) => {
+app.post('/api/analyze', requireFirebase, async (req, res) => {
   const { word, user_id } = req.body;
   try {
     const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
@@ -1016,7 +1033,7 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 // ── AI Generation ────────────────────────────────────────────────────
-app.post('/api/generate', async (req, res) => {
+app.post('/api/generate', requireFirebase, async (req, res) => {
   const { word, user_id } = req.body;
   try {
     const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
@@ -1040,8 +1057,8 @@ app.post('/api/generate', async (req, res) => {
   }
 });
 
-// ── AI Quiz Generation ────────────────────────────────────────────────
-app.post('/api/ai/generate-quiz', requireFirebase, async (req, res) => {
+// ── Quiz Generation ──────────────────────────────────────────────────
+app.post('/api/quiz-generate', requireFirebase, async (req, res) => {
   try {
     const { count = 5, difficulty = 'medium' } = req.body;
     const aiConfig = await getAiConfig();
@@ -1050,7 +1067,9 @@ app.post('/api/ai/generate-quiz', requireFirebase, async (req, res) => {
     const searchSnap = await db.collection('search_events')
       .orderBy('timestamp', 'desc').limit(50).get();
     const words = [...new Set(searchSnap.docs.map(d => d.data().word).filter(Boolean))].slice(0, 20);
-    if (words.length < 3) return res.status(400).json({ error: 'Not enough searched words to generate quiz. Need at least 3.' });
+    if (words.length < 3) {
+      words.push('serendipity', 'ephemeral', 'eloquent', 'resilient', 'ubiquitous');
+    }
 
     const difficultyPrompt = difficulty === 'easy'
       ? 'Make questions about basic word definitions, suitable for beginners.'
@@ -1126,13 +1145,13 @@ Rules:
   }
 });
 
-app.get('/api/quiz-pool', async (req, res) => {
+app.get('/api/quiz-pool', requireFirebase, async (req, res) => {
   try {
     const snap = await db.collection('quiz_pool').orderBy('createdAt', 'desc').limit(10).get();
     const questions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     res.json({ questions, count: questions.length });
   } catch (e) {
-    res.json({ questions: [] });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -1144,7 +1163,38 @@ app.get('/api/quiz-pool/status', async (req, res) => {
     const createdAt = docs[0]?.createdAt || null;
     res.json({ hasQuiz: true, count: docs.length, generatedAt: createdAt, generatedWords: docs.map(d => d.word) });
   } catch (e) {
-    res.json({ hasQuiz: false, count: 0, generatedAt: null });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/quiz-pool/publish', requireFirebase, async (req, res) => {
+  try {
+    if (!firebaseReady) return res.status(503).json({ error: 'Firebase not initialized' });
+    const { questions, difficulty } = req.body;
+    if (!questions || !Array.isArray(questions) || questions.length === 0) {
+      return res.status(400).json({ error: 'Questions array is required' });
+    }
+    const batch = db.batch();
+    const poolRef = db.collection('quiz_pool');
+    const existing = await poolRef.get();
+    existing.docs.forEach(doc => batch.delete(doc.ref));
+    questions.forEach((q, i) => {
+      const docRef = poolRef.doc();
+      batch.set(docRef, {
+        word: q.word || '',
+        question: q.question || '',
+        options: q.options || [],
+        correctIndex: q.correctIndex || 0,
+        hint: q.hint || '',
+        difficulty: difficulty || 'medium',
+        createdAt: Date.now(),
+        index: i,
+      });
+    });
+    await batch.commit();
+    res.json({ success: true, count: questions.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -1175,7 +1225,7 @@ app.get('/api/ai/notification-agent-config', requireFirebase, async (req, res) =
     if (!doc.exists) return res.json({ enabled: false, prompt: '', intervalMinutes: 60, lastSentAt: 0, nextSendAt: 0 });
     res.json({ ...doc.data() });
   } catch (e) {
-    res.json({ enabled: false, prompt: '', intervalMinutes: 60, lastSentAt: 0, nextSendAt: 0 });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -1305,11 +1355,13 @@ setTimeout(() => {
 
 // ── AI Word Enrichment ──────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API_KEY || '';
-const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2 || process.env.GROK_API_KEY_2 || '';
+const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2 || '';
+if (process.env.GROK_API_KEY) console.warn('GROK_API_KEY is a deprecated fallback, use GROQ_API_KEY instead');
+if (process.env.GROK_API_KEY_2) console.warn('GROK_API_KEY_2 is a deprecated fallback, use GROQ_API_KEY_2 instead');
 const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
 
-console.log(`AI Enrichment: GROQ_API_KEY=${GROQ_API_KEY ? '✅ set (' + GROQ_API_KEY.slice(0, 8) + '...)' : '❌ not set'}, GROQ_API_KEY_2=${GROQ_API_KEY_2 ? '✅ set' : '❌ not set'}, GEMINI_API_KEY=${GEMINI_API_KEY ? '✅ set' : '❌ not set'}`);
+console.log(`AI Enrichment: GROQ_API_KEY=${GROQ_API_KEY ? '✅ set' : '❌ not set'}, GROQ_API_KEY_2=${GROQ_API_KEY_2 ? '✅ set' : '❌ not set'}, GEMINI_API_KEY=${GEMINI_API_KEY ? '✅ set' : '❌ not set'}`);
 
 async function getAiConfig() {
   if (!firebaseReady) {
@@ -1504,7 +1556,7 @@ app.get('/api/notifications', requireFirebase, async (req, res) => {
     const unreadCount = notifications.filter(n => !n.isRead).length;
     res.json({ notifications, unreadCount });
   } catch (e) {
-    res.json({ notifications: [], unreadCount: 0 });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -1515,7 +1567,35 @@ app.post('/api/notifications/read', requireFirebase, async (req, res) => {
       .doc(notificationId).update({ isRead: true });
     res.json({ success: true });
   } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── iOS Waitlist ─────────────────────────────────────────────────────
+app.post('/api/waitlist/ios', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Invalid email' });
+    }
+    if (!firebaseReady) return res.json({ success: true });
+    const existing = await db.collection('waitlist_ios').where('email', '==', email).get();
+    if (existing.empty) {
+      await db.collection('waitlist_ios').add({ email, createdAt: Date.now() });
+    }
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/waitlist/ios/count', async (req, res) => {
+  try {
+    if (!firebaseReady) return res.json({ count: 0 });
+    const snap = await db.collection('waitlist_ios').count().get();
+    res.json({ count: snap.data().count || 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -1527,7 +1607,59 @@ app.get('/api/install-analytics', requireFirebase, async (req, res) => {
     const activeUsers = usersSnap.docs.filter(d => d.data().status === 'active').length;
     res.json({ totalInstalls, activeUsers, status: 'ok' });
   } catch (e) {
-    res.json({ totalInstalls: 0, activeUsers: 0, error: e.message });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Bug Reports ───────────────────────────────────────────────────────
+app.post('/api/reports', async (req, res) => {
+  try {
+    if (!firebaseReady) return res.json({ success: true });
+    const { message, username, userId, appVersion } = req.body;
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+    await db.collection('reports').add({
+      message: message.trim(),
+      username: username || 'Unknown',
+      userId: userId || '',
+      appVersion: appVersion || 'unknown',
+      timestamp: Date.now(),
+      status: 'unread',
+    });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/reports', requireFirebase, async (req, res) => {
+  try {
+    const snap = await db.collection('reports').orderBy('timestamp', 'desc').limit(100).get();
+    const reports = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json({ reports });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/reports/:id/status', requireFirebase, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    await db.collection('reports').doc(id).update({ status: status || 'read' });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/reports/:id', requireFirebase, async (req, res) => {
+  try {
+    await db.collection('reports').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

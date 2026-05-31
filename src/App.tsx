@@ -9,7 +9,8 @@ import AppControl from './pages/AppControl';
 import Notifications from './pages/Notifications';
 import Analytics from './pages/Analytics';
 import LeaderboardPage from './pages/Leaderboard';
-import { LayoutDashboard, Users as UsersIcon, BookOpen, Search, Brain, Settings, Bell, BarChart3, Trophy } from 'lucide-react';
+import Reports from './pages/Reports';
+import { LayoutDashboard, Users as UsersIcon, BookOpen, Search, Brain, Settings, Bell, BarChart3, Trophy, Bug } from 'lucide-react';
 
 const tabs = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -21,6 +22,7 @@ const tabs = [
   { id: 'appcontrol', label: 'App Control', icon: Settings },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+  { id: 'reports', label: 'Reports', icon: Bug },
 ];
 
 function getTabFromHash() {
@@ -52,6 +54,7 @@ export default function App() {
       case 'appcontrol': return <AppControl />;
       case 'notifications': return <Notifications />;
       case 'analytics': return <Analytics />;
+      case 'reports': return <Reports />;
       default: return <Dashboard />;
     }
   };
