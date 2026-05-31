@@ -27,6 +27,7 @@ export default function Notifications() {
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
   const [targetUserId, setTargetUserId] = useState('all');
+  const [specificUserId, setSpecificUserId] = useState('');
   const [sending, setSending] = useState(false);
   const [history, setHistory] = useState([]);
   const [activeTab, setActiveTab] = useState('send');
@@ -89,12 +90,14 @@ export default function Notifications() {
 
   const handleSend = async () => {
     if (!title.trim() || !message.trim()) return;
+    const effectiveUserId = targetUserId === 'specific' ? specificUserId : 'all';
+    if (targetUserId === 'specific' && !effectiveUserId.trim()) return;
     setSending(true);
     try {
       const res = await fetch(`${window.location.origin}/api/admin/send-notification`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim(), message: message.trim(), targetUserId }),
+        body: JSON.stringify({ title: title.trim(), message: message.trim(), targetUserId: effectiveUserId }),
       });
       if (res.ok) {
         setTitle('');
@@ -186,8 +189,8 @@ export default function Notifications() {
                 <option value="specific">Specific User (enter UID)</option>
               </select>
               {targetUserId === 'specific' && (
-                <input type="text" value={targetUserId === 'specific' ? '' : targetUserId}
-                  onChange={e => setTargetUserId(e.target.value)}
+                <input type="text" value={specificUserId}
+                  onChange={e => setSpecificUserId(e.target.value)}
                   placeholder="Enter user UID"
                   className="w-full mt-2 px-4 py-2 rounded-lg border border-[#E8DDD0] bg-white text-sm text-[#2A170F] outline-none focus:border-[#D48A4A]" />
               )}

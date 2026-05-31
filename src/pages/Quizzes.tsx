@@ -98,17 +98,19 @@ export default function Quizzes() {
   };
 
   const publishQuiz = async () => {
+    if (!editableQuestions || editableQuestions.length === 0) {
+      setGenerateError('Generate a quiz first before publishing');
+      return;
+    }
     setPublishing(true);
     try {
-      const res = await fetch(`${window.location.origin}/api/ai/generate-quiz`, {
+      const res = await fetch(`${window.location.origin}/api/quiz-pool/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: quizCount, difficulty }),
+        body: JSON.stringify({ questions: editableQuestions, difficulty }),
       });
       const data = await res.json();
       if (data.success) {
-        setGeneratedQuestions(data.questions);
-        setEditableQuestions(JSON.parse(JSON.stringify(data.questions)));
         setPublishSuccess(true);
         await loadPoolStatus();
         setTimeout(() => setPublishSuccess(false), 3000);
