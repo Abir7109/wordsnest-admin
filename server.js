@@ -1095,12 +1095,8 @@ Rules:
 
     if (!aiText) return res.status(500).json({ error: 'AI failed to generate quiz' });
 
-    console.error('RAW AI TEXT:', aiText?.slice(0, 500));
     let questions = parseAiResponse(aiText);
-    if (!questions || !Array.isArray(questions)) {
-      console.error('PARSE FAILED for text:', aiText?.slice(0, 300));
-      return res.status(500).json({ error: 'AI returned invalid format' });
-    }
+    if (!questions || !Array.isArray(questions)) return res.status(500).json({ error: 'AI returned invalid format' });
 
     // Validate, sanitize and shuffle
     questions = questions.slice(0, count).map((q, i) => {
@@ -1414,6 +1410,43 @@ function parseAiResponse(text) {
   return null;
 }
 
+app.post('/api/ocr-word', async (req, res) => {
+  const { image } = req.body;
+  if (!image) return res.status(400).json({ error: 'Image is required' });
+
+  const MAX_SIZE = 10000;
+  if (image.length > MAX_SIZE * 1.5) {
+    const truncated = image.substring(0, MAX_SIZE);
+    const prompt = `You are an OCR assistant. This is a base64-encoded cropped image of a single English word written on paper or printed. Look at this image data and identify the word. Return ONLY valid JSON (no markdown, no explanation) with this exact structure:
+{
+  "word": "the_identified_word",
+  "confidence": "high/medium/low"
+}
+Image data (truncated): ${truncated.substring(0, 500)}...
+If you cannot clearly identify a single English word, return {"word": ""}.`;
+
+    const aiConfig = await getAiConfig();
+    let aiText = null;
+    if (aiConfig.aiProvider === 'gemini') {
+      aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+    } else {
+      aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+      if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
+    }
+
+    if (aiText) {
+      try {
+        const parsed = parseAiResponse(aiText);
+        if (parsed && parsed.word) {
+          return res.json({ word: parsed.word, confidence: parsed.confidence || 'medium', source: 'ai' });
+        }
+      } catch {}
+    }
+  }
+  res.json({ word: '', confidence: 'low', source: 'none' });
+});
+
 app.post('/api/enrich-word', async (req, res) => {
   const { word } = req.body;
   if (!word) return res.status(400).json({ error: 'Word is required' });
@@ -1423,15 +1456,18 @@ app.post('/api/enrich-word', async (req, res) => {
     return res.json({ enriched: false, synonyms: [], antonyms: [], simpleSentence: '', complexSentence: '', compoundSentence: '' });
   }
 
-  const prompt = `You are a dictionary assistant. Given the word "${word}", return ONLY valid JSON (no markdown, no explanation) with this exact structure:
+  const prompt = `You are an IELTS-specialized dictionary assistant. Given the word "${word}", return ONLY valid JSON (no markdown, no explanation) with this exact structure:
 {
   "synonyms": ["synonym1", "synonym2", "synonym3", "synonym4", "synonym5"],
   "antonyms": ["antonym1", "antonym2", "antonym3"],
-  "simpleSentence": "A short simple example sentence using the word ${word}.",
-  "complexSentence": "A longer complex sentence using ${word} that shows deeper context.",
-  "compoundSentence": "A compound sentence using ${word} with two independent clauses."
+  "simpleSentence": "A simple IELTS Band 5-6 level example sentence using ${word}.",
+  "complexSentence": "An advanced IELTS Band 7-8 level sentence using ${word} with deeper context.",
+  "compoundSentence": "A compound sentence using ${word} suitable for IELTS writing task 2.",
+  "simpleDefinition": "A very simple, easy-to-understand definition of ${word} in 8-10 words, suitable for a beginner English learner.",
+  "banglaMeaning": "The Bengali (Bangla) meaning/translation of ${word}. If unsure provide the closest Bengali equivalent.",
+  "ieltsBand": "The IELTS band level for this word as a number: 5 (basic), 6 (intermediate), 7 (advanced), or 8 (expert). Based on how commonly the word appears at each band level."
 }
-Make sure synonyms and antonyms are real English words that are actually synonymous/antonymous with "${word}". Keep sentences natural and educational. Return ONLY the JSON.`;
+Make sure synonyms and antonyms are real English words that are actually synonymous/antonymous with "${word}". Keep sentences natural and IELTS-appropriate. Simple definition MUST be very short and beginner-friendly. Return ONLY the JSON.`;
 
   let aiText = null;
   if (aiConfig.aiProvider === 'gemini') {
