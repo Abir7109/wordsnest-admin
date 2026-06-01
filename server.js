@@ -32,7 +32,7 @@ app.use('/api/', globalLimiter);
 const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
-  message: { error: 'Too many OTP attempts. Try again later.' },
+  message: { error: 'Too many authentication attempts. Try again later.' },
 });
 app.use('/api/auth/', authLimiter);
 
@@ -1053,56 +1053,9 @@ app.post('/api/register-fcm', requireFirebase, async (req, res) => {
 });
 
 // ── Auth Endpoints ──────────────────────────────────────────────────
-app.post('/api/auth/login', requireFirebase, async (req, res) => {
-  try {
-    const { phone, password } = req.body;
-    if (!phone || !password) return res.status(400).json({ error: 'Phone and password are required' });
 
-    const cleanPhone = sanitize(phone);
-    const user = await getUserDoc(cleanPhone);
-    if (!user) return res.status(404).json({ error: 'No account found with this phone number' });
-    if (user.status === 'banned') return res.status(403).json({ error: 'Your account has been banned' });
+// Universal Firebase token exchange — works with email, Google, or phone
 
-    const valid = await bcrypt.compare(password, user.passwordHash || '');
-    if (!valid) return res.status(401).json({ error: 'Incorrect password' });
-
-    // Password correct — signal client to request OTP from Firebase
-    res.json({ success: true, phone: cleanPhone, username: user.username || '', requireOtp: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/api/auth/verify-session', requireFirebase, async (req, res) => {
-  try {
-    const { phone, firebaseToken } = req.body;
-    if (!phone || !firebaseToken) return res.status(400).json({ error: 'Phone and Firebase token required' });
-
-    // Verify Firebase ID token
-    await admin.auth().verifyIdToken(firebaseToken);
-
-    // Check user exists, create if new (for first-time Firebase phone auth)
-    const existing = await getUserDoc(phone);
-    if (!existing) {
-      await db.collection('users').doc(phone).set({
-        phone, username: phone, status: 'active',
-        createdAt: Date.now(), lastActive: Date.now(),
-        dailyUsage: { date: getTodayStr(), count: 0 },
-        subscription: { plan: 'free', active: false, lifetimeFree: false, expiresAt: null },
-        payments: [],
-      });
-    }
-
-    const token = createToken(phone, phone);
-    await db.collection('users').doc(phone).set({ lastActive: Date.now() }, { merge: true });
-
-    res.json({ success: true, token, phone, username: existing?.username || phone, isNewUser: !existing });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Universal Firebase token exchange — works with email or phone auth
 app.post('/api/auth/exchange-token', requireFirebase, async (req, res) => {
   try {
     const { firebaseToken } = req.body;
@@ -1135,18 +1088,7 @@ app.post('/api/auth/exchange-token', requireFirebase, async (req, res) => {
   }
 });
 
-app.post('/api/auth/check-phone', requireFirebase, async (req, res) => {
-  try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Phone is required' });
-    const user = await getUserDoc(sanitize(phone));
-    res.json({ exists: !!user, username: user?.username || '' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Phone + password registration (after OTP verification)
+// Phone + password registration
 app.post('/api/auth/register', requireFirebase, async (req, res) => {
   try {
     const { phone, username, password } = req.body;
@@ -1189,7 +1131,7 @@ app.post('/api/auth/phone-signin', requireFirebase, async (req, res) => {
     const user = await getUserDoc(cleanPhone);
     if (!user) return res.status(404).json({ error: 'User not found. Please sign up first.' });
 
-    if (!user.passwordHash) return res.status(400).json({ error: 'No password set. Use OTP sign-in or Google.' });
+    if (!user.passwordHash) return res.status(400).json({ error: 'No password set. Please sign up with a password first.' });
 
     const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) return res.status(401).json({ error: 'Incorrect password' });
