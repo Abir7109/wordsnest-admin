@@ -532,8 +532,19 @@ app.get('/api/users/:uid', requireFirebase, async (req, res) => {
 
 app.delete('/api/users/:uid', requireFirebase, async (req, res) => {
   try {
-    await admin.auth().deleteUser(req.params.uid);
-    await db.collection('users').doc(req.params.uid).delete();
+    const identifier = req.params.uid;
+    // Try deleting by Firebase Auth UID first (for Google Sign-In users)
+    try {
+      await admin.auth().deleteUser(identifier);
+    } catch {
+      // If that fails, the identifier is likely a phone number — look up by phone and delete
+      try {
+        const userRecord = await admin.auth().getUserByPhoneNumber(identifier);
+        await admin.auth().deleteUser(userRecord.uid);
+      } catch { /* Auth user might not exist — proceed with Firestore delete */ }
+    }
+    // Delete the Firestore doc
+    await db.collection('users').doc(identifier).delete();
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
