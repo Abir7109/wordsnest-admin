@@ -148,21 +148,20 @@ function UserDetailModal({ phone, onClose }) {
                 </div>
               </div>
             )}
-          </div>
 
-          <div className="pt-4 border-t border-[#E8DDD0]">
-            <button onClick={() => {
-              if (!confirm(`Are you sure you want to permanently delete user ${phone}?\n\nThis will also delete their Firebase Auth account. This cannot be undone!`)) return;
-              fetch(`${window.location.origin}/api/users/${encodeURIComponent(phone)}`, { method: 'DELETE' })
-                .then(r => r.json())
-                .then(() => { onClose(); window.location.reload(); })
-                .catch(console.error);
-            }}
-              className="w-full px-4 py-2.5 text-sm font-medium rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors">
-              Delete User Permanently
-            </button>
+            <div className="pt-4 border-t border-[#E8DDD0]">
+              <button onClick={() => {
+                if (!confirm(`Are you sure you want to permanently delete user ${phone}?\n\nThis will also delete their Firebase Auth account. This cannot be undone!`)) return;
+                fetch(`${window.location.origin}/api/users/${encodeURIComponent(phone)}`, { method: 'DELETE' })
+                  .then(r => r.json())
+                  .then(() => { onClose(); window.location.reload(); })
+                  .catch(console.error);
+              }}
+                className="w-full px-4 py-2.5 text-sm font-medium rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors">
+                Delete User Permanently
+              </button>
+            </div>
           </div>
-        </div>
         ) : (
           <div className="p-8 text-center text-[#897365]">Failed to load user details</div>
         )}
