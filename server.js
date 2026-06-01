@@ -1102,6 +1102,39 @@ app.post('/api/auth/verify-session', requireFirebase, async (req, res) => {
   }
 });
 
+// Universal Firebase token exchange — works with email or phone auth
+app.post('/api/auth/exchange-token', requireFirebase, async (req, res) => {
+  try {
+    const { firebaseToken } = req.body;
+    if (!firebaseToken) return res.status(400).json({ error: 'Firebase token required' });
+
+    const decoded = await admin.auth().verifyIdToken(firebaseToken);
+    const uid = decoded.uid;
+    const email = decoded.email || '';
+    const phone = decoded.phone_number || uid;
+
+    const existing = await getUserDoc(uid);
+    if (!existing) {
+      const now = Date.now();
+      await db.collection('users').doc(uid).set({
+        uid, email, phone: phone, username: email.substringBefore('@') || uid,
+        status: 'active', createdAt: now, lastActive: now,
+        dailyUsage: { date: getTodayStr(), count: 0 },
+        subscription: { plan: 'free', active: false, lifetimeFree: false, expiresAt: null },
+        payments: [],
+      });
+    } else {
+      await db.collection('users').doc(uid).update({ lastActive: Date.now() });
+    }
+
+    const token = createToken(phone, uid);
+    const username = existing?.username || email.substringBefore('@') || uid;
+    res.json({ success: true, token, uid, email, phone, username, isNewUser: !existing });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/auth/check-phone', requireFirebase, async (req, res) => {
   try {
     const { phone } = req.body;
