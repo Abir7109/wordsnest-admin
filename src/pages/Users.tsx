@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, ChevronDown, ChevronRight, X, Mail, Smartphone, Calendar, Shield, BookOpen, Brain, Activity, Crown, Ban, Star, RefreshCw } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, X, Mail, Smartphone, Calendar, Shield, BookOpen, Brain, Activity, Crown, Ban, Star, RefreshCw, Clock } from 'lucide-react';
 
 function timeAgo(ts) {
   if (!ts) return '—';
@@ -69,6 +69,17 @@ function UserDetailModal({ phone, onClose }) {
                 <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${detail.profile?.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                   {detail.profile?.status || 'inactive'}
                 </span>
+              </div>
+              <div className="bg-[#F5F0EB] rounded-xl p-4">
+                <div className="flex items-center gap-2 text-xs text-[#897365] mb-1"><Clock className="w-3 h-3" />Cooldown</div>
+                {(() => {
+                  const cd = detail.profile?.coolDownUntil;
+                  if (!cd || cd < Date.now()) return <span className="text-xs text-[#897365]">—</span>;
+                  const diff = cd - Date.now();
+                  const h = Math.floor(diff / 3600000);
+                  const m = Math.floor((diff % 3600000) / 60000);
+                  return <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">{h}h {m}m remaining</span>;
+                })()}
               </div>
               <div className="bg-[#F5F0EB] rounded-xl p-4">
                 <div className="flex items-center gap-2 text-xs text-[#897365] mb-1"><Crown className="w-3 h-3" />Subscription</div>
@@ -243,10 +254,47 @@ export default function Users() {
       .catch(console.error);
   };
 
+  const toggleCooldown = (phone, currentCoolDown) => {
+    if (currentCoolDown && currentCoolDown > Date.now()) {
+      if (!confirm(`Remove cooldown for ${phone}? The user will be able to search again.`)) return;
+      fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/cooldown`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remove: true }),
+      })
+        .then(r => r.json())
+        .then(() => load())
+        .catch(console.error);
+    } else {
+      const hours = prompt('Enter cooldown duration in hours (e.g., 24 for 24 hours):', '24');
+      if (!hours) return;
+      const ms = parseInt(hours) * 3600000;
+      if (isNaN(ms) || ms <= 0) return;
+      if (!confirm(`Apply ${hours}h cooldown to ${phone}? The user won't be able to search.`)) return;
+      fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/cooldown`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ durationMs: ms }),
+      })
+        .then(r => r.json())
+        .then(() => load())
+        .catch(console.error);
+    }
+  };
+
   const totalWords = users.reduce((s, u) => s + (u.wordCount || 0), 0);
   const totalQuizzes = users.reduce((s, u) => s + (u.quizCount || 0), 0);
   const activeUsers = users.filter(u => u.status === 'active').length;
   const premiumUsers = users.filter(u => u.subscription?.plan === 'premium' || u.subscription?.lifetimeFree).length;
+
+  function coolDownRemaining(ts) {
+    if (!ts) return null;
+    const diff = ts - Date.now();
+    if (diff <= 0) return null;
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    return `${h}h ${m}m`;
+  }
 
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-[#897365]">Loading...</div>;
@@ -318,6 +366,7 @@ export default function Users() {
               <th className="p-3 font-medium">Phone / UID</th>
               <th className="p-3 font-medium">User</th>
               <th className="p-3 font-medium">Plan</th>
+              <th className="p-3 font-medium">Cooldown</th>
               <th className="p-3 font-medium">Daily Used</th>
               <th className="p-3 font-medium">Device</th>
               <th className="p-3 font-medium">Words</th>
@@ -361,6 +410,13 @@ export default function Users() {
                     )}
                     {isBanned && <span className="ml-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700"><Ban className="w-3 h-3" /> Banned</span>}
                   </td>
+                  <td className="p-3">
+                    {(() => {
+                      const remaining = coolDownRemaining(user.coolDownUntil);
+                      if (!remaining) return <span className="text-xs text-[#897365]">—</span>;
+                      return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700"><Clock className="w-3 h-3" /> {remaining}</span>;
+                    })()}
+                  </td>
                   <td className="p-3 text-xs text-[#897365]">{dailyUsed}/10 {dailyDate ? `(${new Date(dailyDate).toLocaleDateString()})` : ''}</td>
                   <td className="p-3 text-xs text-[#897365] max-w-[100px] truncate" title={user.deviceName || user.device_model}>{user.deviceName || user.device_model || '—'}</td>
                   <td className="p-3 font-medium text-[#AA7137]">{user.wordCount || 0}</td>
@@ -376,6 +432,11 @@ export default function Users() {
                         className={`w-7 h-7 rounded-lg inline-flex items-center justify-center transition-colors ${isBanned ? 'text-red-600 bg-red-50 hover:bg-red-100' : 'text-[#897365] hover:text-red-500 hover:bg-red-50'}`}
                         title={isBanned ? 'Unban user' : 'Ban user'}>
                         <Ban className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={e => { e.stopPropagation(); toggleCooldown(user.phone || user.uid, user.coolDownUntil); }}
+                        className={`w-7 h-7 rounded-lg inline-flex items-center justify-center transition-colors ${user.coolDownUntil && user.coolDownUntil > Date.now() ? 'text-orange-600 bg-orange-50 hover:bg-orange-100' : 'text-[#897365] hover:text-orange-500 hover:bg-orange-50'}`}
+                        title={user.coolDownUntil && user.coolDownUntil > Date.now() ? 'Remove cooldown' : 'Set cooldown (pause searching)'}>
+                        <Clock className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </td>

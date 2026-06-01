@@ -14,6 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: false, contentSecurityPolicy: false }));
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '5mb' }));
@@ -32,6 +33,7 @@ app.use('/api/', globalLimiter);
 const authLimiter = rateLimit({
   windowMs: 30 * 1000,
   max: 5,
+  skipSuccessfulRequests: true,
   message: { error: 'Too many authentication attempts. Try again later.' },
 });
 app.use('/api/auth/', authLimiter);
@@ -191,6 +193,11 @@ async function checkAndUpdateDailyUsage(phone) {
 
   // Premium users have unlimited access
   if (isPremium(user)) return { allowed: true, remaining: -1, isPremium: true };
+
+  // Cooldown check — admin can pause a user from searching
+  if (user.coolDownUntil && user.coolDownUntil > Date.now()) {
+    return { allowed: false, remaining: 0, reason: 'cool_down' };
+  }
 
   const usage = user.dailyUsage || {};
   const count = usage.date === today ? (usage.count || 0) : 0;
@@ -1264,11 +1271,12 @@ app.get('/api/subscription/status', requireFirebase, requireJwt, async (req, res
       active: premium,
       lifetimeFree: user.subscription?.lifetimeFree || false,
       expiresAt: user.subscription?.expiresAt || null,
-      dailyRemaining: premium ? -1 : (10 - dailyCount),
+      dailyRemaining: (user.coolDownUntil && user.coolDownUntil > Date.now()) ? 0 : (premium ? -1 : (10 - dailyCount)),
       dailyUsed: dailyCount,
       dailyLimit: premium ? -1 : 10,
       username: user.username || '',
       status: user.status || 'active',
+      coolDownUntil: user.coolDownUntil || null,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1331,6 +1339,34 @@ app.put('/api/admin/users/:phone/ban', requireFirebase, async (req, res) => {
     }, { merge: true });
 
     res.json({ success: true, banned: !!ban });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/admin/users/:phone/cooldown', requireFirebase, async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { durationMs, remove } = req.body; // durationMs = milliseconds from now, remove = true to clear
+    const user = await getUserDoc(phone);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (remove) {
+      await db.collection('users').doc(phone).update({ coolDownUntil: null });
+      return res.json({ success: true, coolDownUntil: null });
+    }
+
+    if (!durationMs || typeof durationMs !== 'number' || durationMs < 0) {
+      return res.status(400).json({ error: 'Invalid durationMs — must be a positive number' });
+    }
+
+    const coolDownUntil = Date.now() + durationMs;
+    await db.collection('users').doc(phone).update({
+      coolDownUntil,
+      lastActive: Date.now(),
+    });
+
+    res.json({ success: true, coolDownUntil });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1502,9 +1538,10 @@ app.post('/api/ai-analyze', requireFirebase, requireJwt, async (req, res) => {
     // Check daily word limit
     const limitCheck = await checkAndUpdateDailyUsage(req.userPhone);
     if (!limitCheck.allowed) {
+      const isCooldown = limitCheck.reason === 'cool_down';
       return res.status(403).json({
-        error: 'Daily word limit reached',
-        code: 'limit_reached',
+        error: isCooldown ? 'Account is temporarily paused by admin' : 'Daily word limit reached',
+        code: limitCheck.reason,
         dailyRemaining: 0,
         dailyLimit: 10,
         isPremium: false,
@@ -1544,9 +1581,10 @@ app.post('/api/generate', requireFirebase, requireJwt, async (req, res) => {
 
     const limitCheck = await checkAndUpdateDailyUsage(req.userPhone);
     if (!limitCheck.allowed) {
+      const isCooldown = limitCheck.reason === 'cool_down';
       return res.status(403).json({
-        error: 'Daily word limit reached',
-        code: 'limit_reached',
+        error: isCooldown ? 'Account is temporarily paused by admin' : 'Daily word limit reached',
+        code: limitCheck.reason,
         dailyRemaining: 0,
         dailyLimit: 10,
         isPremium: false,
