@@ -252,50 +252,62 @@ app.get('/api/dashboard', requireFirebase, async (req, res) => {
     const dayAgo = Date.now() - 86400000;
     const todayStart = getDayStart();
 
-    const [
-      users, searches, words, quizzes, activeUsers, newUsersToday,
-      searchesToday, wordsToday, quizzesToday, totalInstalls,
-    ] = await Promise.all([
-      safeCount(db.collection('users').count().get()),
-      safeCount(db.collection('search_events').count().get()),
-      safeCount(db.collectionGroup('words').count().get()),
-      safeCount(db.collectionGroup('quizzes').count().get()),
-      safeCount(db.collection('users').where('lastActive', '>=', dayAgo).count().get()),
-      safeCount(db.collection('users').where('createdAt', '>=', todayStart).count().get()),
-      safeCount(db.collection('search_events').where('timestamp', '>=', todayStart).count().get()),
-      safeCount(db.collectionGroup('words').where('timestamp', '>=', todayStart).count().get()),
-      safeCount(db.collectionGroup('quizzes').where('timestamp', '>=', todayStart).count().get()),
-      safeCount(db.collection('installs').count().get()),
+    // Use simple get() queries that work without composite indexes
+    const [usersSnap, searchSnap, installsSnap] = await Promise.all([
+      safeGet(db.collection('users').get()),
+      safeGet(db.collection('search_events').limit(1000).get()),
+      safeGet(db.collection('installs').limit(1000).get()),
     ]);
 
-    let averageQuizScore = 0;
-    const recentQuizzesSnap = await safeGet(db.collectionGroup('quizzes').orderBy('timestamp', 'desc').limit(500).get());
-    const scores = recentQuizzesSnap.docs.map(d => d.data().score).filter(s => s !== undefined && s !== null);
-    if (scores.length > 0) {
-      averageQuizScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
-    }
+    const allUsers = usersSnap.docs || [];
+    const users = allUsers.length;
+    const activeUsers = allUsers.filter(d => (d.data().lastActive || 0) >= dayAgo).length;
+    const newUsersToday = allUsers.filter(d => (d.data().createdAt || 0) >= todayStart).length;
+    const searches = searchSnap.docs.length;
+    const searchesToday = (searchSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
+    const totalInstalls = installsSnap.docs.length;
 
-    let uniqueWordsSaved = 0;
-    let topWordType = 'N/A';
-    const typeCounts = {};
+    // Count words and quizzes by iterating each user's subcollections (no index needed)
+    let words = 0;
+    let quizzes = 0;
+    let wordsToday = 0;
+    let quizzesToday = 0;
+    const allScores = [];
     const uniqueWords = new Set();
-    const wordsSnapAll = await safeGet(db.collectionGroup('words').limit(1000).get());
-    for (const d of wordsSnapAll.docs) {
-      const data = d.data();
-      if (data.word) uniqueWords.add(data.word.toLowerCase());
-      if (data.type) {
-        typeCounts[data.type] = (typeCounts[data.type] || 0) + 1;
+    const typeCounts = {};
+
+    for (const userDoc of allUsers) {
+      const uid = userDoc.id;
+      const [wordsSnap, quizzesSnap] = await Promise.all([
+        safeGet(db.collection('users').doc(uid).collection('words').get()),
+        safeGet(db.collection('users').doc(uid).collection('quizzes').get()),
+      ]);
+      words += (wordsSnap.docs || []).length;
+      quizzes += (quizzesSnap.docs || []).length;
+      wordsToday += (wordsSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
+      quizzesToday += (quizzesSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
+
+      for (const d of wordsSnap.docs || []) {
+        const data = d.data();
+        if (data.word) uniqueWords.add(data.word.toLowerCase());
+        if (data.type) typeCounts[data.type] = (typeCounts[data.type] || 0) + 1;
+      }
+      for (const d of quizzesSnap.docs || []) {
+        const s = d.data().score;
+        if (s !== undefined && s !== null) allScores.push(s);
       }
     }
-    uniqueWordsSaved = uniqueWords.size;
-    if (Object.keys(typeCounts).length > 0) {
-      topWordType = Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0];
-    }
+
+    const averageQuizScore = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0;
+    const uniqueWordsSaved = uniqueWords.size;
+    const topWordType = Object.keys(typeCounts).length > 0
+      ? Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0]
+      : 'N/A';
 
     const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
     const weekAgo = getDaysAgo(7);
-    const usersBeforeWeek = await safeCount(db.collection('users').where('createdAt', '<=', weekAgo).count().get());
-    const retained = await safeCount(db.collection('users').where('lastActive', '>=', getDaysAgo(1)).where('createdAt', '<=', weekAgo).count().get());
+    const usersBeforeWeek = allUsers.filter(d => (d.data().createdAt || 0) <= weekAgo).length;
+    const retained = allUsers.filter(d => (d.data().lastActive || 0) >= getDaysAgo(1) && (d.data().createdAt || 0) <= weekAgo).length;
     const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
 
     res.json({
@@ -495,11 +507,11 @@ app.get('/api/users', requireFirebase, async (req, res) => {
     await Promise.all(userIds.map(async (uid) => {
       try {
         const [wordsSnap, quizzesSnap] = await Promise.all([
-          db.collection('users').doc(uid).collection('words').count().get(),
-          db.collection('users').doc(uid).collection('quizzes').get(),
+          safeGet(db.collection('users').doc(uid).collection('words').get()),
+          safeGet(db.collection('users').doc(uid).collection('quizzes').get()),
         ]);
-        wordCounts[uid] = wordsSnap.data().count || 0;
-        const qData = quizzesSnap.docs.map(d => d.data().score).filter(s => s !== undefined && s !== null);
+        wordCounts[uid] = (wordsSnap.docs || []).length;
+        const qData = (quizzesSnap.docs || []).map(d => d.data().score).filter(s => s !== undefined && s !== null);
         quizCounts[uid] = qData.length;
         avgScores[uid] = qData.length > 0 ? Math.round(qData.reduce((a, b) => a + b, 0) / qData.length) : 0;
       } catch (e) {
