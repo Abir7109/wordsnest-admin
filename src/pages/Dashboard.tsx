@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
-import { Users, Search, BookOpen, Brain, TrendingUp, Clock, Zap, Target, Activity, UserPlus, BarChart3, Sparkles, Layers } from 'lucide-react';
+import { Users, Search, BookOpen, Brain, TrendingUp, Clock, Zap, Target, Activity, UserPlus, BarChart3, Sparkles, Layers, RefreshCw } from 'lucide-react';
 import type { DashboardStats, TimelineDay, TopWord, TopSearch, WordTypeStat, RecentActivity } from '../types';
 
 function timeAgo(ts) {
@@ -230,16 +230,18 @@ export default function Dashboard() {
   const [wordTypes, setWordTypes] = useState([]);
   const [activity, setActivity] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const load = () => {
+      setError(null);
       Promise.all([
-        fetch(`${window.location.origin}/api/dashboard`).then(r => r.json()),
-        fetch(`${window.location.origin}/api/dashboard/timeline`).then(r => r.json()),
-        fetch(`${window.location.origin}/api/dashboard/top-words`).then(r => r.json()),
-        fetch(`${window.location.origin}/api/dashboard/top-searches`).then(r => r.json()),
-        fetch(`${window.location.origin}/api/dashboard/word-types`).then(r => r.json()),
-        fetch(`${window.location.origin}/api/dashboard/recent-activity`).then(r => r.json()),
+        fetch(`${window.location.origin}/api/dashboard`).then(r => { if (!r.ok) throw new Error(`/api/dashboard: HTTP ${r.status}`); return r.json(); }),
+        fetch(`${window.location.origin}/api/dashboard/timeline`).then(r => { if (!r.ok) throw new Error(`/api/timeline: HTTP ${r.status}`); return r.json(); }),
+        fetch(`${window.location.origin}/api/dashboard/top-words`).then(r => { if (!r.ok) throw new Error(`/api/top-words: HTTP ${r.status}`); return r.json(); }),
+        fetch(`${window.location.origin}/api/dashboard/top-searches`).then(r => { if (!r.ok) throw new Error(`/api/top-searches: HTTP ${r.status}`); return r.json(); }),
+        fetch(`${window.location.origin}/api/dashboard/word-types`).then(r => { if (!r.ok) throw new Error(`/api/word-types: HTTP ${r.status}`); return r.json(); }),
+        fetch(`${window.location.origin}/api/dashboard/recent-activity`).then(r => { if (!r.ok) throw new Error(`/api/activity: HTTP ${r.status}`); return r.json(); }),
       ])
         .then(([statsData, timelineData, wordsData, searchesData, typesData, activityData]) => {
           setStats(statsData);
@@ -250,7 +252,11 @@ export default function Dashboard() {
           setActivity(activityData.activities || []);
           setLoading(false);
         })
-        .catch(() => setLoading(false));
+        .catch(err => {
+          console.error('Dashboard fetch error:', err);
+          setError(err.message);
+          setLoading(false);
+        });
     };
     load();
     const interval = setInterval(load, 7000);
@@ -263,9 +269,25 @@ export default function Dashboard() {
     );
   }
 
+  if (error) {
+    return (
+      <div className="p-8">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold text-[#2A170F]">Dashboard</h1>
+          <button onClick={() => { setLoading(true); setError(null); }} className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-[#897365] hover:text-[#2A170F] transition-colors">
+            <RefreshCw className="w-3.5 h-3.5" /> Retry
+          </button>
+        </div>
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm">
+          Failed to load dashboard: {error}
+        </div>
+      </div>
+    );
+  }
+
   if (!stats) {
     return (
-      <div className="flex items-center justify-center h-64 text-[#897365]">Failed to load dashboard.</div>
+      <div className="flex items-center justify-center h-64 text-[#897365]">No data available.</div>
     );
   }
 
