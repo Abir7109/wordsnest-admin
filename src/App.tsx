@@ -10,11 +10,13 @@ import Notifications from './pages/Notifications';
 import Analytics from './pages/Analytics';
 import LeaderboardPage from './pages/Leaderboard';
 import Reports from './pages/Reports';
-import { LayoutDashboard, Users as UsersIcon, BookOpen, Search, Brain, Settings, Bell, BarChart3, Trophy, Bug } from 'lucide-react';
+import Payments from './pages/Payments';
+import { LayoutDashboard, Users as UsersIcon, BookOpen, Search, Brain, Settings, Bell, BarChart3, Trophy, Bug, CreditCard } from 'lucide-react';
 
 const tabs = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'users', label: 'Users', icon: UsersIcon },
+  { id: 'payments', label: 'Payments', icon: CreditCard },
   { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
   { id: 'words', label: 'Saved Words', icon: BookOpen },
   { id: 'searches', label: 'Searches', icon: Search },
@@ -47,6 +49,7 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard': return <Dashboard />;
       case 'users': return <Users />;
+      case 'payments': return <Payments />;
       case 'words': return <Words />;
       case 'searches': return <Searches />;
       case 'quizzes': return <Quizzes />;

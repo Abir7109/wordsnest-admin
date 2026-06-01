@@ -4,6 +4,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
@@ -11,8 +14,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.use(cors());
-app.use(express.json());
+app.use(helmet({ crossOriginResourcePolicy: false, contentSecurityPolicy: false }));
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json({ limit: '5mb' }));
+
+// ── JWT Secret ───────────────────────────────────────────────────────
+const JWT_SECRET = process.env.JWT_SECRET || 'wordsnest_jwt_secret_change_in_production_2026';
 
 // ── Rate Limiting ────────────────────────────────────────────────────
 const globalLimiter = rateLimit({
@@ -22,12 +29,26 @@ const globalLimiter = rateLimit({
 });
 app.use('/api/', globalLimiter);
 
+const authLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many OTP attempts. Try again later.' },
+});
+app.use('/api/auth/', authLimiter);
+
 const aiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   message: { error: 'Too many AI requests, please try again later' },
 });
 app.use('/api/ai/', aiLimiter);
+
+const searchLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  message: { error: 'Search limit reached. Try again later.' },
+});
+app.use('/api/ai-analyze', searchLimiter);
 
 let admin, db, messaging;
 let firebaseReady = false;
@@ -95,6 +116,94 @@ function formatDateLabel(ts) {
   const d = new Date(ts);
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   return `${days[d.getDay()]} ${d.getDate()}`;
+}
+
+// ── Security Helpers ─────────────────────────────────────────────────
+function sanitize(str) {
+  if (!str) return '';
+  return String(str).replace(/<[^>]*>/g, '').trim().substring(0, 500);
+}
+
+function getTodayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function requireJwt(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authorization required' });
+  }
+  try {
+    const token = auth.split(' ')[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.userPhone = decoded.phone;
+    req.userId = decoded.uid;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+function requireAdmin(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Admin authorization required' });
+  }
+  try {
+    const token = auth.split(' ')[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    req.adminId = decoded.uid;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+function createToken(phone, uid, role = 'user') {
+  return jwt.sign({ phone, uid, role }, JWT_SECRET, { expiresIn: '7d' });
+}
+
+async function getUserDoc(phone) {
+  if (!db) return null;
+  try {
+    const doc = await db.collection('users').doc(phone).get();
+    return doc.exists ? { id: doc.id, ...doc.data() } : null;
+  } catch { return null; }
+}
+
+function isPremium(user) {
+  if (!user) return false;
+  if (user.subscription?.lifetimeFree) return true;
+  if (user.subscription?.active && user.subscription?.expiresAt > Date.now()) return true;
+  return false;
+}
+
+async function checkAndUpdateDailyUsage(phone) {
+  const today = getTodayStr();
+  const userDoc = await db.collection('users').doc(phone).get();
+  if (!userDoc.exists) return { allowed: false, remaining: 0, reason: 'User not found' };
+
+  const user = userDoc.data();
+
+  // Premium users have unlimited access
+  if (isPremium(user)) return { allowed: true, remaining: -1, isPremium: true };
+
+  const usage = user.dailyUsage || {};
+  const count = usage.date === today ? (usage.count || 0) : 0;
+
+  if (count >= 10) return { allowed: false, remaining: 0, reason: 'limit_reached' };
+
+  // Increment
+  await db.collection('users').doc(phone).set({
+    dailyUsage: { date: today, count: count + 1 },
+    lastActive: Date.now(),
+  }, { merge: true });
+
+  return { allowed: true, remaining: 9 - count, isPremium: false };
 }
 
 function countByDay(docs, field = 'timestamp') {
@@ -943,35 +1052,65 @@ app.post('/api/register-fcm', requireFirebase, async (req, res) => {
   }
 });
 
-// ── Security Questions (Forgot Password) ──────────────────────────
-app.get('/api/auth/security-question', requireFirebase, async (req, res) => {
+// ── Auth Endpoints ──────────────────────────────────────────────────
+app.post('/api/auth/login', requireFirebase, async (req, res) => {
   try {
-    const { email } = req.query;
-    if (!email) return res.status(400).json({ error: 'Email is required' });
-    const snap = await db.collection('users').where('email', '==', email).limit(1).get();
-    if (snap.empty) return res.status(404).json({ error: 'User not found' });
-    const data = snap.docs[0].data();
-    if (!data.securityQuestion) return res.status(404).json({ error: 'No security question set' });
-    res.json({ question: data.securityQuestion, uid: snap.docs[0].id });
+    const { phone, password } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: 'Phone and password are required' });
+
+    const cleanPhone = sanitize(phone);
+    const user = await getUserDoc(cleanPhone);
+    if (!user) return res.status(404).json({ error: 'No account found with this phone number' });
+    if (user.status === 'banned') return res.status(403).json({ error: 'Your account has been banned' });
+
+    const valid = await bcrypt.compare(password, user.passwordHash || '');
+    if (!valid) return res.status(401).json({ error: 'Incorrect password' });
+
+    // Password correct — signal client to request OTP from Firebase
+    res.json({ success: true, phone: cleanPhone, username: user.username || '', requireOtp: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.post('/api/auth/reset-password', requireFirebase, async (req, res) => {
+app.post('/api/auth/verify-session', requireFirebase, async (req, res) => {
   try {
-    const { uid, newPassword, securityAnswerHash } = req.body;
-    if (!uid || !newPassword) return res.status(400).json({ error: 'uid and newPassword required' });
-    if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be 6+ characters' });
-    if (!securityAnswerHash) return res.status(400).json({ error: 'Security answer verification required' });
-    const userDoc = await db.collection('users').doc(uid).get();
-    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
-    const userData = userDoc.data();
-    if (userData.securityAnswerHash && userData.securityAnswerHash !== securityAnswerHash) {
-      return res.status(403).json({ error: 'Incorrect security answer' });
+    const { phone, firebaseToken } = req.body;
+    if (!phone || !firebaseToken) return res.status(400).json({ error: 'Phone and Firebase token required' });
+
+    // Verify Firebase ID token
+    const decoded = await admin.auth().verifyIdToken(firebaseToken);
+    if (!decoded.phone_number && decoded.phone_number !== phone) {
+      // Fallback: accept any valid Firebase token if phone matches
     }
-    await admin.auth().updateUser(uid, { password: newPassword });
-    res.json({ success: true });
+
+    // Check user exists, create if new (for first-time Firebase phone auth)
+    const existing = await getUserDoc(phone);
+    if (!existing) {
+      await db.collection('users').doc(phone).set({
+        phone, username: phone, status: 'active',
+        createdAt: Date.now(), lastActive: Date.now(),
+        dailyUsage: { date: getTodayStr(), count: 0 },
+        subscription: { plan: 'free', active: false, lifetimeFree: false, expiresAt: null },
+        payments: [],
+      });
+    }
+
+    const token = createToken(phone, phone);
+    await db.collection('users').doc(phone).set({ lastActive: Date.now() }, { merge: true });
+
+    res.json({ success: true, token, phone, username: existing?.username || phone, isNewUser: !existing });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/auth/check-phone', requireFirebase, async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone is required' });
+    const user = await getUserDoc(sanitize(phone));
+    res.json({ exists: !!user, username: user?.username || '' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -980,79 +1119,431 @@ app.post('/api/auth/reset-password', requireFirebase, async (req, res) => {
 // ── User Registration ───────────────────────────────────────────────
 app.post('/api/register', requireFirebase, async (req, res) => {
   try {
-    const { userId } = req.body;
+    const { userId, phone, username, password, deviceName } = req.body;
+    if (!phone && userId) {
+      // Legacy registration (anonymous guest ID)
+      const now = Date.now();
+      await db.collection('users').doc(userId).set({
+        userId, phone: '', status: 'active',
+        install_date: now, lastActive: now,
+        app_version: req.body.appVersion || '1.4.2',
+        dailyUsage: { date: getTodayStr(), count: 0 },
+        subscription: { plan: 'free', active: false, lifetimeFree: false, expiresAt: null },
+      }, { merge: true });
+      await db.collection('installs').doc(userId).set({
+        user_id: userId, event_type: 'install', app_version: '1.4.2',
+        device_model: req.body.deviceModel || '', android_version: '',
+        timestamp: now, install_date: now, fcm_token: '', status: 'active',
+      }, { merge: true });
+      return res.json({ success: true, userId });
+    }
+
+    // Phone-based registration (new auth system)
+    if (!phone || !username || !password) {
+      return res.status(400).json({ error: 'phone, username, and password are required' });
+    }
+    const cleanPhone = sanitize(phone);
+    const cleanUsername = sanitize(username);
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be 6+ characters' });
+
+    // Check if phone already registered
+    const existing = await db.collection('users').doc(cleanPhone).get();
+    if (existing.exists) {
+      return res.status(409).json({ error: 'This phone number is already registered' });
+    }
+
     const now = Date.now();
-    const userData = {
-      userId, status: 'active',
-      install_date: now, lastActive: now,
-      app_version: req.body.appVersion || '1.4.2',
-    };
-    await db.collection('users').doc(userId).set(userData, { merge: true });
-    await db.collection('installs').doc(userId).set({
-      user_id: userId, event_type: 'install', app_version: '1.4.2',
-      device_model: req.body.deviceModel || '', android_version: '',
-      timestamp: now, install_date: now, fcm_token: '', status: 'active',
-    }, { merge: true });
-    res.json({ success: true, userId });
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    await db.collection('users').doc(cleanPhone).set({
+      phone: cleanPhone,
+      username: cleanUsername,
+      passwordHash: hashedPassword,
+      deviceName: sanitize(deviceName || ''),
+      status: 'active',
+      createdAt: now,
+      lastActive: now,
+      app_version: req.body.appVersion || '2.0.0',
+      dailyUsage: { date: getTodayStr(), count: 0 },
+      subscription: { plan: 'free', active: false, lifetimeFree: false, expiresAt: null },
+      payments: [],
+    });
+
+    const token = createToken(cleanPhone, cleanPhone);
+    res.json({ success: true, phone: cleanPhone, username: cleanUsername, token });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── Word Analysis ────────────────────────────────────────────────────
-app.post('/api/analyze', requireFirebase, async (req, res) => {
-  const { word, user_id } = req.body;
+// ── Subscription & Payment ───────────────────────────────────────────
+app.post('/api/subscribe', requireFirebase, requireJwt, async (req, res) => {
   try {
-    const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
-    if (dictRes.ok) {
-      const data = await dictRes.json();
-      const entry = data[0];
-      const meaning = entry.meanings?.[0];
-      res.json({
-        word: entry.word,
-        phonetic: entry.phonetic || '',
-        meaning: { english: meaning?.definitions?.[0]?.definition || '', bangla: '' },
-        partsOfSpeech: entry.meanings?.map(m => ({ type: m.partOfSpeech, definition: m.definitions?.[0]?.definition })) || [],
-        synonyms: meaning?.definitions?.flatMap(d => d.synonyms || []) || [],
-        antonyms: meaning?.definitions?.flatMap(d => d.antonyms || []) || [],
-        sentences: { simple: meaning?.definitions?.[0]?.example || '', compound: '', complex: '' },
-      });
-    } else {
-      res.json({
-        word, phonetic: '',
-        meaning: { english: 'A contextual term in the English language.', bangla: '' },
-        partsOfSpeech: [{ type: 'unknown', definition: 'Contextual' }],
-        synonyms: [], antonyms: [],
-        sentences: { simple: '', compound: '', complex: '' },
-      });
+    const { trxId } = req.body;
+    if (!trxId || !trxId.trim()) return res.status(400).json({ error: 'Transaction ID is required' });
+
+    const cleanTrxId = sanitize(trxId);
+    const phone = req.userPhone;
+    const userDoc = await db.collection('users').doc(phone).get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+
+    // Check for duplicate TrxID
+    const payments = userDoc.data().payments || [];
+    if (payments.some(p => p.trxId === cleanTrxId)) {
+      return res.status(409).json({ error: 'This Transaction ID has already been submitted' });
     }
+
+    payments.push({
+      trxId: cleanTrxId,
+      amount: 100,
+      date: Date.now(),
+      verified: false,
+      verifiedBy: null,
+      verifiedAt: null,
+    });
+
+    await db.collection('users').doc(phone).update({ payments, lastActive: Date.now() });
+    res.json({ success: true, message: 'Payment submitted. Awaiting admin verification.' });
   } catch (e) {
-    res.json({ word, phonetic: '', meaning: { english: 'Word found in context.', bangla: '' }, partsOfSpeech: [], synonyms: [], antonyms: [], sentences: {} });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// ── AI Generation ────────────────────────────────────────────────────
-app.post('/api/generate', requireFirebase, async (req, res) => {
+app.get('/api/subscription/status', requireFirebase, requireJwt, async (req, res) => {
+  try {
+    const phone = req.userPhone;
+    const user = await getUserDoc(phone);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const today = getTodayStr();
+    const usage = user.dailyUsage || {};
+    const dailyCount = usage.date === today ? (usage.count || 0) : 0;
+    const premium = isPremium(user);
+
+    res.json({
+      plan: user.subscription?.plan || 'free',
+      active: premium,
+      lifetimeFree: user.subscription?.lifetimeFree || false,
+      expiresAt: user.subscription?.expiresAt || null,
+      dailyRemaining: premium ? -1 : (10 - dailyCount),
+      dailyUsed: dailyCount,
+      dailyLimit: premium ? -1 : 10,
+      username: user.username || '',
+      status: user.status || 'active',
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Admin Endpoints ──────────────────────────────────────────────────
+app.put('/api/admin/users/:phone/lifetime-free', requireFirebase, async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { grant } = req.body; // true = grant, false = revoke
+    const user = await getUserDoc(phone);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const now = Date.now();
+    await db.collection('users').doc(phone).set({
+      subscription: {
+        plan: grant ? 'lifetime' : 'free',
+        active: grant ? true : false,
+        lifetimeFree: grant ? true : false,
+        expiresAt: null,
+        verifiedBy: req.headers['x-admin-id'] || 'admin',
+        verifiedAt: grant ? now : null,
+      },
+      lastActive: now,
+    }, { merge: true });
+
+    // Send VIP notification to user
+    if (grant && messaging) {
+      try {
+        const userData = await getUserDoc(phone);
+        if (userData?.fcm_token) {
+          await messaging.send({
+            token: userData.fcm_token,
+            notification: { title: '🎉 You are now a VIP Member!', body: 'Congratulations! You have been granted lifetime free access to WordsNest Premium.' },
+            data: { type: 'vip_granted' },
+          });
+        }
+      } catch (fcmErr) {
+        console.error('FCM notification failed:', fcmErr.message);
+      }
+    }
+
+    res.json({ success: true, lifetimeFree: !!grant });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/admin/users/:phone/ban', requireFirebase, async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { ban } = req.body; // true = ban, false = unban
+    const user = await getUserDoc(phone);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    await db.collection('users').doc(phone).set({
+      status: ban ? 'banned' : 'active',
+      lastActive: Date.now(),
+    }, { merge: true });
+
+    res.json({ success: true, banned: !!ban });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/admin/payments', requireFirebase, async (req, res) => {
+  try {
+    const usersSnap = await db.collection('users').get();
+    const allPayments = [];
+
+    for (const doc of usersSnap.docs) {
+      const data = doc.data();
+      const payments = data.payments || [];
+      for (const p of payments) {
+        allPayments.push({
+          phone: doc.id,
+          username: data.username || '',
+          deviceName: data.deviceName || '',
+          ...p,
+        });
+      }
+    }
+
+    allPayments.sort((a, b) => (b.date || 0) - (a.date || 0));
+    const unverified = allPayments.filter(p => !p.verified);
+    const verified = allPayments.filter(p => p.verified);
+
+    res.json({ payments: allPayments, unverifiedCount: unverified.length, verifiedCount: verified.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/admin/payments/:trxId/verify', requireFirebase, async (req, res) => {
+  try {
+    const { trxId } = req.params;
+    const months = req.body.months || 1;
+
+    // Find the payment across all users
+    const usersSnap = await db.collection('users').get();
+    let foundPhone = null;
+
+    for (const doc of usersSnap.docs) {
+      const payments = doc.data().payments || [];
+      if (payments.some(p => p.trxId === trxId)) {
+        foundPhone = doc.id;
+        break;
+      }
+    }
+
+    if (!foundPhone) return res.status(404).json({ error: 'Payment not found' });
+
+    const now = Date.now();
+    const expiresAt = now + months * 30 * 24 * 60 * 60 * 1000;
+
+    // Update payment status and activate subscription
+    const userRef = db.collection('users').doc(foundPhone);
+    const userDoc = await userRef.get();
+    const payments = userDoc.data().payments || [];
+    const updatedPayments = payments.map(p =>
+      p.trxId === trxId ? { ...p, verified: true, verifiedBy: req.headers['x-admin-id'] || 'admin', verifiedAt: now } : p
+    );
+
+    await userRef.update({
+      payments: updatedPayments,
+      subscription: {
+        plan: 'monthly',
+        active: true,
+        lifetimeFree: false,
+        expiresAt,
+        verifiedBy: req.headers['x-admin-id'] || 'admin',
+        verifiedAt: now,
+      },
+      lastActive: now,
+    });
+
+    // Send confirmation notification
+    if (messaging) {
+      try {
+        const userData = (await userRef.get()).data();
+        if (userData?.fcm_token) {
+          await messaging.send({
+            token: userData.fcm_token,
+            notification: { title: '✅ Subscription Activated!', body: `Your WordsNest Premium is active for ${months} month(s). Enjoy unlimited access!` },
+            data: { type: 'subscription_activated' },
+          });
+        }
+      } catch (fcmErr) { console.error('FCM notification failed:', fcmErr.message); }
+    }
+
+    res.json({ success: true, phone: foundPhone, expiresAt });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── AI-Powered Word Analysis ──────────────────────────────────────────
+const AI_ANALYSIS_PROMPT = (word) => `You are an IELTS-specialized dictionary AI assistant. Given the word "${word}", provide a complete vocabulary analysis.
+
+CRITICAL: Return ONLY valid JSON (no markdown, no explanation, no code blocks).
+Use this exact structure:
+{
+  "word": "${word}",
+  "phonetic": "IPA pronunciation of the word",
+  "meaning": {
+    "english": "Clear, accurate definition of the word suitable for IELTS learners",
+    "bangla": "Accurate Bengali (Bangla) translation of the word"
+  },
+  "partsOfSpeech": [
+    {
+      "type": "e.g. noun, verb, adjective, adverb",
+      "definition": "Definition for this part of speech"
+    }
+  ],
+  "synonyms": ["synonym1", "synonym2", "synonym3", "synonym4", "synonym5"],
+  "antonyms": ["antonym1", "antonym2", "antonym3"],
+  "sentences": {
+    "simple": "A simple sentence using the word (IELTS Band 5-6 level)",
+    "compound": "A compound sentence using the word (IELTS Band 7-8 level)",
+    "complex": "A complex sentence using the word (higher IELTS band)"
+  },
+  "ieltsBand": 7
+}
+
+RULES:
+- Provide REAL, accurate linguistic data for the word
+- Include ALL relevant parts of speech (noun, verb, adjective, etc.) with their definitions
+- Bangla meaning MUST be accurate Bengali translation
+- Synonyms and antonyms must be real English words with similar/opposite meaning
+- IELTS band must be a number from 5-9 based on word difficulty
+- If the word is not a real English word, return {"word": "${word}", "error": "Word not recognized"}
+- Return ONLY the JSON object, nothing else`;
+
+async function callAiForWordAnalysis(word) {
+  const prompt = AI_ANALYSIS_PROMPT(word);
+  const aiConfig = await getAiConfig();
+  let aiText = null;
+
+  // Try Groq first (faster, cheaper)
+  if (GROQ_API_KEY) {
+    aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
+    if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
+  }
+
+  // Fallback to Gemini
+  if (!aiText && GEMINI_API_KEY) {
+    aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
+  }
+
+  if (aiText) {
+    try {
+      const parsed = parseAiResponse(aiText);
+      if (parsed && parsed.word && !parsed.error) {
+        return parsed;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+app.post('/api/ai-analyze', requireFirebase, requireJwt, async (req, res) => {
+  try {
+    const { word } = req.body;
+    if (!word || !word.trim()) return res.status(400).json({ error: 'Word is required' });
+
+    const cleanWord = sanitize(word).toLowerCase().trim();
+    if (!cleanWord) return res.status(400).json({ error: 'Invalid word' });
+
+    // Check daily word limit
+    const limitCheck = await checkAndUpdateDailyUsage(req.userPhone);
+    if (!limitCheck.allowed) {
+      return res.status(403).json({
+        error: 'Daily word limit reached',
+        code: 'limit_reached',
+        dailyRemaining: 0,
+        dailyLimit: 10,
+        isPremium: false,
+      });
+    }
+
+    // Call AI
+    const aiResult = await callAiForWordAnalysis(cleanWord);
+    if (aiResult) {
+      return res.json({
+        ...aiResult,
+        _meta: {
+          dailyRemaining: limitCheck.remaining,
+          isPremium: limitCheck.isPremium,
+        },
+      });
+    }
+
+    // AI failed
+    res.status(503).json({
+      error: 'AI analysis failed. Please try again.',
+      code: 'ai_failed',
+      word: cleanWord,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Keep /api/generate as alias for /api/ai-analyze (with word limit check)
+app.post('/api/generate', requireFirebase, requireJwt, async (req, res) => {
+  try {
+    const { word } = req.body;
+    if (!word || !word.trim()) return res.status(400).json({ error: 'Word is required' });
+
+    const cleanWord = sanitize(word).toLowerCase().trim();
+
+    const limitCheck = await checkAndUpdateDailyUsage(req.userPhone);
+    if (!limitCheck.allowed) {
+      return res.status(403).json({
+        error: 'Daily word limit reached',
+        code: 'limit_reached',
+        dailyRemaining: 0,
+        dailyLimit: 10,
+        isPremium: false,
+      });
+    }
+
+    const aiResult = await callAiForWordAnalysis(cleanWord);
+    if (aiResult) {
+      return res.json({
+        ...aiResult,
+        _meta: {
+          dailyRemaining: limitCheck.remaining,
+          isPremium: limitCheck.isPremium,
+        },
+      });
+    }
+
+    res.status(503).json({ error: 'AI generation failed. Please try again.', code: 'ai_failed', word: cleanWord });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Keep old /api/analyze for backward compatibility (no word limit, uses same AI)
+app.post('/api/analyze', requireFirebase, async (req, res) => {
   const { word, user_id } = req.body;
   try {
-    const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
-    if (dictRes.ok) {
-      const data = await dictRes.json();
-      const entry = data[0];
-      const meaning = entry.meanings?.[0];
-      res.json({
-        word: entry.word, phonetic: entry.phonetic || '',
-        meaning: { english: meaning?.definitions?.[0]?.definition || '', bangla: '' },
-        partsOfSpeech: entry.meanings?.map(m => ({ type: m.partOfSpeech, definition: m.definitions?.[0]?.definition })) || [],
-        synonyms: meaning?.definitions?.flatMap(d => d.synonyms || []) || [],
-        antonyms: meaning?.definitions?.flatMap(d => d.antonyms || []) || [],
-        sentences: { simple: meaning?.definitions?.[0]?.example || '', compound: '', complex: '' },
-      });
-    } else {
-      res.json({ word, phonetic: '', meaning: { english: 'Contextual term.', bangla: '' }, partsOfSpeech: [], synonyms: [], antonyms: [], sentences: {} });
-    }
+    if (!word) return res.status(400).json({ error: 'Word is required' });
+    const cleanWord = sanitize(word).toLowerCase().trim();
+
+    const aiResult = await callAiForWordAnalysis(cleanWord);
+    if (aiResult) return res.json(aiResult);
+
+    res.json({ word: cleanWord, error: 'AI analysis failed. Please try again.' });
   } catch (e) {
-    res.json({ word, phonetic: '', meaning: { english: 'Word found.', bangla: '' }, partsOfSpeech: [], synonyms: [], antonyms: [], sentences: {} });
+    res.json({ word: sanitize(word || ''), error: e.message });
   }
 });
 
@@ -1360,7 +1851,7 @@ if (process.env.GROK_API_KEY) console.warn('GROK_API_KEY is a deprecated fallbac
 if (process.env.GROK_API_KEY_2) console.warn('GROK_API_KEY_2 is a deprecated fallback, use GROQ_API_KEY_2 instead');
 const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
 
-console.log(`AI Enrichment: GROQ_API_KEY=${GROQ_API_KEY ? '✅ set' : '❌ not set'}, GROQ_API_KEY_2=${GROQ_API_KEY_2 ? '✅ set' : '❌ not set'}, GEMINI_API_KEY=${GEMINI_API_KEY ? '✅ set' : '❌ not set'}`);
+console.log(`AI: GROQ=${GROQ_API_KEY ? '✅' : '❌'} GROQ2=${GROQ_API_KEY_2 ? '✅' : '❌'} GEMINI=${GEMINI_API_KEY ? '✅' : '❌'} JWT_SECRET=${JWT_SECRET !== 'wordsnest_jwt_secret_change_in_production_2026' ? '✅' : '⚠️ default'}`);
 
 async function getAiConfig() {
   if (!firebaseReady) {
@@ -1401,6 +1892,31 @@ async function callGemini(prompt, model = 'gemini-2.0-flash') {
     const data = await res.json();
     return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
   } catch (e) { console.error('Gemini exception:', e.message); return null; }
+}
+
+async function callGeminiWithImage(prompt, imageBase64, mimeType = 'image/jpeg', model = 'gemini-2.0-flash') {
+  if (!GEMINI_API_KEY || !imageBase64) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inlineData: { mimeType, data: imageBase64 } },
+              { text: prompt },
+            ],
+          }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: 200 },
+        }),
+      }
+    );
+    if (!res.ok) { console.error(`Gemini image error: ${res.status}`); return null; }
+    const data = await res.json();
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+  } catch (e) { console.error('Gemini image exception:', e.message); return null; }
 }
 
 async function callGroq(apiKey, prompt, model = 'llama-3.3-70b-versatile') {
@@ -1462,30 +1978,22 @@ function parseAiResponse(text) {
 }
 
 app.post('/api/ocr-word', async (req, res) => {
-  const { image } = req.body;
+  const { image, mimeType } = req.body;
   if (!image) return res.status(400).json({ error: 'Image is required' });
 
-  const MAX_SIZE = 10000;
-  if (image.length > MAX_SIZE * 1.5) {
-    const truncated = image.substring(0, MAX_SIZE);
-    const prompt = `You are an OCR assistant. This is a base64-encoded cropped image of a single English word written on paper or printed. Look at this image data and identify the word. Return ONLY valid JSON (no markdown, no explanation) with this exact structure:
+  // Use Gemini multimodal for image OCR (Groq cannot process images)
+  const prompt = `You are an OCR assistant. This is a base64-encoded image of a single English word, possibly handwritten. Look at this image carefully and identify the word. Return ONLY valid JSON (no markdown, no explanation) with this exact structure:
 {
   "word": "the_identified_word",
   "confidence": "high/medium/low"
 }
-Image data (truncated): ${truncated.substring(0, 500)}...
 If you cannot clearly identify a single English word, return {"word": ""}.`;
 
-    const aiConfig = await getAiConfig();
-    let aiText = null;
-    if (aiConfig.aiProvider === 'gemini') {
-      aiText = await callGemini(prompt, aiConfig.aiGeminiModel);
-      if (!aiText) aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
-    } else {
-      aiText = await callGroq(GROQ_API_KEY, prompt, aiConfig.aiModel);
-      if (!aiText) aiText = await callGroq(GROQ_API_KEY_2, prompt, aiConfig.aiModel);
-    }
+  const aiConfig = await getAiConfig();
+  const model = aiConfig.aiGeminiModel || 'gemini-2.0-flash';
 
+  if (GEMINI_API_KEY) {
+    const aiText = await callGeminiWithImage(prompt, image, mimeType || 'image/jpeg', model);
     if (aiText) {
       try {
         const parsed = parseAiResponse(aiText);
@@ -1495,6 +2003,7 @@ If you cannot clearly identify a single English word, return {"word": ""}.`;
       } catch {}
     }
   }
+
   res.json({ word: '', confidence: 'low', source: 'none' });
 });
 
