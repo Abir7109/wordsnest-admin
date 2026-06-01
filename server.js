@@ -478,7 +478,14 @@ app.get('/api/dashboard/word-types', requireFirebase, async (req, res) => {
 // ── Users ────────────────────────────────────────────────────────────
 app.get('/api/users', requireFirebase, async (req, res) => {
   try {
-    const snap = await db.collection('users').orderBy('lastActive', 'desc').limit(100).get();
+    let snap;
+    try {
+      snap = await db.collection('users').orderBy('lastActive', 'desc').limit(100).get();
+    } catch (indexErr) {
+      // Fallback if composite index missing — just get all users without ordering
+      console.warn('Users index missing, using fallback query:', indexErr.message);
+      snap = await db.collection('users').limit(100).get();
+    }
 
     const userIds = snap.docs.map(d => d.id);
     const wordCounts = {};
@@ -522,11 +529,21 @@ app.get('/api/users/:uid', requireFirebase, async (req, res) => {
     const userDoc = await db.collection('users').doc(uid).get();
     if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
 
-    const [wordsSnap, quizzesSnap, searchHistorySnap] = await Promise.all([
-      db.collection('users').doc(uid).collection('words').orderBy('timestamp', 'desc').limit(100).get(),
-      db.collection('users').doc(uid).collection('quizzes').orderBy('timestamp', 'desc').limit(50).get(),
-      db.collection('users').doc(uid).collection('search_history').orderBy('timestamp', 'desc').limit(50).get(),
-    ]);
+    let wordsSnap, quizzesSnap, searchHistorySnap;
+    try {
+      [wordsSnap, quizzesSnap, searchHistorySnap] = await Promise.all([
+        db.collection('users').doc(uid).collection('words').orderBy('timestamp', 'desc').limit(100).get(),
+        db.collection('users').doc(uid).collection('quizzes').orderBy('timestamp', 'desc').limit(50).get(),
+        db.collection('users').doc(uid).collection('search_history').orderBy('timestamp', 'desc').limit(50).get(),
+      ]);
+    } catch (indexErr) {
+      console.warn(`Subcollection index missing for ${uid}: ${indexErr.message}`);
+      [wordsSnap, quizzesSnap, searchHistorySnap] = await Promise.all([
+        db.collection('users').doc(uid).collection('words').limit(100).get(),
+        db.collection('users').doc(uid).collection('quizzes').limit(50).get(),
+        db.collection('users').doc(uid).collection('search_history').limit(50).get(),
+      ]);
+    }
 
     const { securityAnswerHash, ...safeProfile } = { uid, ...userDoc.data() };
     res.json({
