@@ -141,7 +141,17 @@ function requireJwt(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.userPhone = decoded.phone;
     req.userId = decoded.uid;
-    next();
+    // Verify the user still exists in Firestore (deleted users get logged out)
+    if (db) {
+      db.collection('users').doc(decoded.phone).get().then(userDoc => {
+        if (!userDoc.exists) {
+          return res.status(401).json({ error: 'User no longer exists', code: 'user_deleted' });
+        }
+        next();
+      }).catch(() => next());
+    } else {
+      next();
+    }
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
@@ -533,6 +543,21 @@ app.get('/api/users/:uid', requireFirebase, async (req, res) => {
 app.delete('/api/users/:uid', requireFirebase, async (req, res) => {
   try {
     const identifier = req.params.uid;
+
+    // Send force_logout FCM before deleting (so user gets logged out immediately)
+    if (db) {
+      try {
+        const userDoc = await db.collection('users').doc(identifier).get();
+        const userData = userDoc.data();
+        if (userData?.fcm_token && messaging) {
+          await messaging.send({
+            token: userData.fcm_token,
+            data: { type: 'force_logout', title: 'Account Deleted', message: 'Your account has been deleted. You are being logged out.' },
+          }).catch(() => {});
+        }
+      } catch { /* FCM send is best-effort */ }
+    }
+
     // Try deleting by Firebase Auth UID first (for Google Sign-In users)
     try {
       await admin.auth().deleteUser(identifier);
