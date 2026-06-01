@@ -150,7 +150,6 @@ function UserDetailModal({ phone, onClose }) {
             )}
           </div>
 
-          {/* Delete User */}
           <div className="pt-4 border-t border-[#E8DDD0]">
             <button onClick={() => {
               if (!confirm(`Are you sure you want to permanently delete user ${phone}?\n\nThis will also delete their Firebase Auth account. This cannot be undone!`)) return;
@@ -163,6 +162,7 @@ function UserDetailModal({ phone, onClose }) {
               Delete User Permanently
             </button>
           </div>
+        </div>
         ) : (
           <div className="p-8 text-center text-[#897365]">Failed to load user details</div>
         )}
