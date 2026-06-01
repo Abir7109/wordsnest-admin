@@ -202,7 +202,12 @@ async function checkAndUpdateDailyUsage(phone) {
   const usage = user.dailyUsage || {};
   const count = usage.date === today ? (usage.count || 0) : 0;
 
-  if (count >= 10) return { allowed: false, remaining: 0, reason: 'limit_reached' };
+  if (count >= 10) {
+    // Auto-set 24h cooldown when user exhausts daily limit
+    const coolDownUntil = Date.now() + 24 * 60 * 60 * 1000;
+    await db.collection('users').doc(phone).update({ coolDownUntil, lastActive: Date.now() });
+    return { allowed: false, remaining: 0, reason: 'limit_reached' };
+  }
 
   // Increment
   await db.collection('users').doc(phone).set({
@@ -1352,7 +1357,11 @@ app.put('/api/admin/users/:phone/cooldown', requireFirebase, async (req, res) =>
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     if (remove) {
-      await db.collection('users').doc(phone).update({ coolDownUntil: null });
+      const today = getTodayStr();
+      await db.collection('users').doc(phone).update({
+        coolDownUntil: null,
+        dailyUsage: { date: today, count: 0 },
+      });
       return res.json({ success: true, coolDownUntil: null });
     }
 
