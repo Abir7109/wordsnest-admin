@@ -208,7 +208,11 @@ export default function Users() {
 
   const toggleLifetimeFree = (phone, current) => {
     if (!confirm(`${current ? 'Revoke' : 'Grant'} lifetime free access for ${phone}?`)) return;
-    fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/lifetime-free`, { method: 'PUT' })
+    fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/lifetime-free`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grant: !current }),
+    })
       .then(r => r.json())
       .then(() => load())
       .catch(console.error);
@@ -216,7 +220,11 @@ export default function Users() {
 
   const toggleBan = (phone, current) => {
     if (!confirm(`${current ? 'Unban' : 'Ban'} user ${phone}?`)) return;
-    fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/ban`, { method: 'PUT' })
+    fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/ban`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ban: !current }),
+    })
       .then(r => r.json())
       .then(() => load())
       .catch(console.error);
