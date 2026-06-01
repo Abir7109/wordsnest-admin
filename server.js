@@ -1146,6 +1146,63 @@ app.post('/api/auth/check-phone', requireFirebase, async (req, res) => {
   }
 });
 
+// Phone + password registration (after OTP verification)
+app.post('/api/auth/register', requireFirebase, async (req, res) => {
+  try {
+    const { phone, username, password } = req.body;
+    if (!phone || !username || !password) return res.status(400).json({ error: 'Phone, username, and password required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+
+    const cleanPhone = sanitize(phone);
+    let user = await getUserDoc(cleanPhone);
+    const now = Date.now();
+
+    if (!user) {
+      await db.collection('users').doc(cleanPhone).set({
+        phone: cleanPhone, username: sanitize(username), status: 'active',
+        createdAt: now, lastActive: now,
+        passwordHash: await bcrypt.hash(password, 10),
+        dailyUsage: { date: getTodayStr(), count: 0 },
+        subscription: { plan: 'free', active: false, lifetimeFree: false, expiresAt: null },
+        payments: [],
+      });
+    } else {
+      await db.collection('users').doc(cleanPhone).update({
+        username: sanitize(username), passwordHash: await bcrypt.hash(password, 10), lastActive: now,
+      });
+    }
+
+    const token = createToken(cleanPhone, cleanPhone);
+    res.json({ success: true, token, phone: cleanPhone, username: sanitize(username), isNewUser: !user });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Phone + password sign-in
+app.post('/api/auth/phone-signin', requireFirebase, async (req, res) => {
+  try {
+    const { phone, password } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: 'Phone and password required' });
+
+    const cleanPhone = sanitize(phone);
+    const user = await getUserDoc(cleanPhone);
+    if (!user) return res.status(404).json({ error: 'User not found. Please sign up first.' });
+
+    if (!user.passwordHash) return res.status(400).json({ error: 'No password set. Use OTP sign-in or Google.' });
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) return res.status(401).json({ error: 'Incorrect password' });
+
+    const token = createToken(cleanPhone, cleanPhone);
+    await db.collection('users').doc(cleanPhone).update({ lastActive: Date.now() });
+
+    res.json({ success: true, token, phone: cleanPhone, username: user.username || cleanPhone });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── User Registration ───────────────────────────────────────────────
 app.post('/api/register', requireFirebase, async (req, res) => {
   try {
