@@ -185,19 +185,28 @@ export default function Users() {
   const [users, setUsers] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [selectedPhone, setSelectedPhone] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
   const [planFilter, setPlanFilter] = useState('all');
   const [sortBy, setSortBy] = useState('lastActive');
 
   const load = () => {
+    setError(null);
     fetch(`${window.location.origin}/api/users`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+        return r.json();
+      })
       .then(data => {
         setUsers(data.users ?? []);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(err => {
+        console.error('Users fetch error:', err);
+        setError(err.message);
+        setLoading(false);
+      });
   };
 
   useEffect(() => {
@@ -298,6 +307,22 @@ export default function Users() {
 
   if (loading) {
     return <div className="flex items-center justify-center h-64 text-[#897365]">Loading...</div>;
+  }
+
+  if (error) {
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-[#2A170F]">Users</h1>
+            <p className="text-sm text-red-500 mt-0.5">Error loading users: {error}</p>
+          </div>
+          <button onClick={load} className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-[#897365] hover:text-[#2A170F] transition-colors">
+            <RefreshCw className="w-3.5 h-3.5" /> Retry
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
