@@ -267,42 +267,10 @@ app.get('/api/dashboard', requireFirebase, async (req, res) => {
     const searchesToday = (searchSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
     const totalInstalls = installsSnap.docs.length;
 
-    // Count words and quizzes by iterating each user's subcollections (no index needed)
-    let words = 0;
-    let quizzes = 0;
-    let wordsToday = 0;
-    let quizzesToday = 0;
-    const allScores = [];
-    const uniqueWords = new Set();
-    const typeCounts = {};
-
-    for (const userDoc of allUsers) {
-      const uid = userDoc.id;
-      const [wordsSnap, quizzesSnap] = await Promise.all([
-        safeGet(db.collection('users').doc(uid).collection('words').get()),
-        safeGet(db.collection('users').doc(uid).collection('quizzes').get()),
-      ]);
-      words += (wordsSnap.docs || []).length;
-      quizzes += (quizzesSnap.docs || []).length;
-      wordsToday += (wordsSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
-      quizzesToday += (quizzesSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
-
-      for (const d of wordsSnap.docs || []) {
-        const data = d.data();
-        if (data.word) uniqueWords.add(data.word.toLowerCase());
-        if (data.type) typeCounts[data.type] = (typeCounts[data.type] || 0) + 1;
-      }
-      for (const d of quizzesSnap.docs || []) {
-        const s = d.data().score;
-        if (s !== undefined && s !== null) allScores.push(s);
-      }
-    }
-
-    const averageQuizScore = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0;
-    const uniqueWordsSaved = uniqueWords.size;
-    const topWordType = Object.keys(typeCounts).length > 0
-      ? Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0]
-      : 'N/A';
+    // Subcollection stats (words, quizzes) skipped from main dashboard — too slow without indexes
+    // Use the dedicated /api/dashboard/top-words, /api/dashboard/word-types, etc. endpoints instead
+    const words = 0, quizzes = 0, wordsToday = 0, quizzesToday = 0;
+    const averageQuizScore = 0, uniqueWordsSaved = 0, topWordType = 'N/A';
 
     const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
     const weekAgo = getDaysAgo(7);
@@ -499,35 +467,13 @@ app.get('/api/users', requireFirebase, async (req, res) => {
       snap = await db.collection('users').limit(100).get();
     }
 
-    const userIds = snap.docs.map(d => d.id);
-    const wordCounts = {};
-    const quizCounts = {};
-    const avgScores = {};
-
-    await Promise.all(userIds.map(async (uid) => {
-      try {
-        const [wordsSnap, quizzesSnap] = await Promise.all([
-          safeGet(db.collection('users').doc(uid).collection('words').get()),
-          safeGet(db.collection('users').doc(uid).collection('quizzes').get()),
-        ]);
-        wordCounts[uid] = (wordsSnap.docs || []).length;
-        const qData = (quizzesSnap.docs || []).map(d => d.data().score).filter(s => s !== undefined && s !== null);
-        quizCounts[uid] = qData.length;
-        avgScores[uid] = qData.length > 0 ? Math.round(qData.reduce((a, b) => a + b, 0) / qData.length) : 0;
-      } catch (e) {
-        wordCounts[uid] = 0;
-        quizCounts[uid] = 0;
-        avgScores[uid] = 0;
-      }
-    }));
-
     const users = snap.docs.map(d => ({
       uid: d.id,
       ...d.data(),
       lastActive: d.data().lastActive || 0,
-      wordCount: wordCounts[d.id] || 0,
-      quizCount: quizCounts[d.id] || 0,
-      averageScore: avgScores[d.id] || 0,
+      wordCount: 0,
+      quizCount: 0,
+      averageScore: 0,
     }));
     res.json({ users });
   } catch (e) {
@@ -1285,8 +1231,24 @@ app.post('/api/register', requireFirebase, async (req, res) => {
       payments: [],
     });
 
+    console.log(`[REGISTER] Created user doc at users/${cleanPhone} (username: ${cleanUsername})`);
     const token = createToken(cleanPhone, cleanPhone);
     res.json({ success: true, phone: cleanPhone, username: cleanUsername, token });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Diagnostic: check user doc existence ──────────────────────────────
+app.get('/api/debug/user/:phone', requireFirebase, async (req, res) => {
+  try {
+    const cleanPhone = sanitize(req.params.phone);
+    const doc = await db.collection('users').doc(cleanPhone).get();
+    res.json({
+      exists: doc.exists,
+      data: doc.data() || null,
+      queriedKey: cleanPhone,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
