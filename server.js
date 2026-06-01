@@ -1079,10 +1079,7 @@ app.post('/api/auth/verify-session', requireFirebase, async (req, res) => {
     if (!phone || !firebaseToken) return res.status(400).json({ error: 'Phone and Firebase token required' });
 
     // Verify Firebase ID token
-    const decoded = await admin.auth().verifyIdToken(firebaseToken);
-    if (!decoded.phone_number && decoded.phone_number !== phone) {
-      // Fallback: accept any valid Firebase token if phone matches
-    }
+    await admin.auth().verifyIdToken(firebaseToken);
 
     // Check user exists, create if new (for first-time Firebase phone auth)
     const existing = await getUserDoc(phone);
@@ -1147,9 +1144,19 @@ app.post('/api/register', requireFirebase, async (req, res) => {
     if (password.length < 6) return res.status(400).json({ error: 'Password must be 6+ characters' });
 
     // Check if phone already registered
-    const existing = await db.collection('users').doc(cleanPhone).get();
-    if (existing.exists) {
-      return res.status(409).json({ error: 'This phone number is already registered' });
+    const existingDoc = await db.collection('users').doc(cleanPhone).get();
+
+    if (existingDoc.exists) {
+      // Phone already exists — this is a registration update (verify-session created skeleton)
+      // Merge username, password, deviceName into existing doc
+      const hashedPassword = await bcrypt.hash(password, 10);
+      await db.collection('users').doc(cleanPhone).update({
+        username: cleanUsername,
+        passwordHash: hashedPassword,
+        deviceName: sanitize(deviceName || ''),
+        lastActive: Date.now(),
+      });
+      return res.json({ success: true, phone: cleanPhone, username: cleanUsername });
     }
 
     const now = Date.now();
