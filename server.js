@@ -267,10 +267,31 @@ app.get('/api/dashboard', requireFirebase, async (req, res) => {
     const searchesToday = (searchSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
     const totalInstalls = installsSnap.docs.length;
 
-    // Subcollection stats (words, quizzes) skipped from main dashboard — too slow without indexes
-    // Use the dedicated /api/dashboard/top-words, /api/dashboard/word-types, etc. endpoints instead
-    const words = 0, quizzes = 0, wordsToday = 0, quizzesToday = 0;
-    const averageQuizScore = 0, uniqueWordsSaved = 0, topWordType = 'N/A';
+    // Word/quiz stats via collectionGroup queries (efficient, needs indexes for prod)
+    const [wordsSnap, quizzesSnap] = await Promise.all([
+      safeGet(db.collectionGroup('words').limit(5000).get()),
+      safeGet(db.collectionGroup('quizzes').limit(5000).get()),
+    ]);
+
+    const words = wordsSnap.docs.length;
+    const quizzes = quizzesSnap.docs.length;
+    const wordsToday = wordsSnap.docs.filter(d => (d.data().timestamp || 0) >= todayStart).length;
+    const quizzesToday = quizzesSnap.docs.filter(d => (d.data().timestamp || 0) >= todayStart).length;
+
+    const allScores = quizzesSnap.docs.map(d => d.data().score).filter(s => s !== undefined && s !== null);
+    const averageQuizScore = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0;
+
+    const uniqueWords = new Set(wordsSnap.docs.filter(d => d.data().word).map(d => d.data().word.toLowerCase()));
+    const uniqueWordsSaved = uniqueWords.size;
+
+    const typeCounts = {};
+    for (const d of wordsSnap.docs) {
+      const t = d.data().type;
+      if (t) typeCounts[t] = (typeCounts[t] || 0) + 1;
+    }
+    const topWordType = Object.keys(typeCounts).length > 0
+      ? Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0]
+      : 'N/A';
 
     const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
     const weekAgo = getDaysAgo(7);
@@ -467,14 +488,44 @@ app.get('/api/users', requireFirebase, async (req, res) => {
       snap = await db.collection('users').limit(100).get();
     }
 
-    const users = snap.docs.map(d => ({
-      uid: d.id,
-      ...d.data(),
-      lastActive: d.data().lastActive || 0,
-      wordCount: 0,
-      quizCount: 0,
-      averageScore: 0,
-    }));
+    // Per-user stats via collectionGroup queries (efficient, needs indexes for prod)
+    const [wordsSnap, quizzesSnap] = await Promise.all([
+      safeGet(db.collectionGroup('words').get()),
+      safeGet(db.collectionGroup('quizzes').get()),
+    ]);
+
+    const wordCounts = {};
+    const quizCounts = {};
+    const allScores = {};
+
+    for (const d of wordsSnap.docs) {
+      const uid = d.ref.parent.parent?.id;
+      if (uid) wordCounts[uid] = (wordCounts[uid] || 0) + 1;
+    }
+    for (const d of quizzesSnap.docs) {
+      const uid = d.ref.parent.parent?.id;
+      if (uid) {
+        quizCounts[uid] = (quizCounts[uid] || 0) + 1;
+        const s = d.data().score;
+        if (s !== undefined && s !== null) {
+          if (!allScores[uid]) allScores[uid] = [];
+          allScores[uid].push(s);
+        }
+      }
+    }
+
+    const users = snap.docs.map(d => {
+      const uid = d.id;
+      const scores = allScores[uid] || [];
+      return {
+        uid,
+        ...d.data(),
+        lastActive: d.data().lastActive || 0,
+        wordCount: wordCounts[uid] || 0,
+        quizCount: quizCounts[uid] || 0,
+        averageScore: scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0,
+      };
+    });
     res.json({ users });
   } catch (e) {
     res.status(500).json({ error: e.message });
