@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Search, TrendingUp, Hash, Users, Calendar, BarChart3, Globe, Trash2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import type { SearchEvent, SearchStats } from '../types';
+import { apiFetch } from '../api';
 
 function timeAgo(ts) {
   if (!ts) return '—';
@@ -24,7 +25,7 @@ export default function Searches() {
 
   function deleteSearch(id) {
     if (!window.confirm('Delete this search event?')) return;
-    fetch(`${window.location.origin}/api/searches/${id}`, { method: 'DELETE' })
+    apiFetch(`${window.location.origin}/api/searches/${id}`, { method: 'DELETE' })
       .then(r => r.json())
       .then(() => setSearches(prev => prev.filter(s => s.id !== id)))
       .catch(() => {});
@@ -33,8 +34,8 @@ export default function Searches() {
   useEffect(() => {
     const load = () => {
       Promise.all([
-        fetch(`${window.location.origin}/api/searches`).then(r => r.json()),
-        fetch(`${window.location.origin}/api/searches/stats`).then(r => r.json()),
+        apiFetch(`${window.location.origin}/api/searches`).then(r => r.json()),
+        apiFetch(`${window.location.origin}/api/searches/stats`).then(r => r.json()),
       ]).then(([data, statsData]) => {
         setSearches(data.searches ?? []);
         setStats(statsData);

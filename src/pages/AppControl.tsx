@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Save, RefreshCw, AlertTriangle, Smartphone, Bell, Shield, Database, Eye, EyeOff, Wifi, Users, Zap, Sparkles } from 'lucide-react';
 import type { AppConfig } from '../types';
+import { apiFetch } from '../api';
 
 export default function AppControl() {
   const [config, setConfig] = useState(null);
@@ -15,7 +16,7 @@ export default function AppControl() {
 
   const loadConfig = () => {
     setLoading(true);
-    fetch(`${window.location.origin}/api/app-config`)
+    apiFetch(`${window.location.origin}/api/app-config`)
       .then(r => r.json())
       .then(data => { setConfig(data); setLoading(false); })
       .catch(() => setLoading(false));
@@ -28,7 +29,7 @@ export default function AppControl() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch(`${window.location.origin}/api/app-config`, {
+      const res = await apiFetch(`${window.location.origin}/api/app-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),

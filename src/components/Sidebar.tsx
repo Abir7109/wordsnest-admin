@@ -1,4 +1,5 @@
 import { motion } from 'motion/react';
+import { LogOut } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 interface Tab {
@@ -11,9 +12,10 @@ interface SidebarProps {
   tabs: Tab[];
   activeTab: string;
   onTabChange: (id: string) => void;
+  onLogout?: () => void;
 }
 
-export function Sidebar({ tabs, activeTab, onTabChange }: SidebarProps) {
+export function Sidebar({ tabs, activeTab, onTabChange, onLogout }: SidebarProps) {
   return (
     <aside className="w-64 bg-[#FFFBF5] border-r border-[#E8DDD0] flex flex-col shrink-0">
       <div className="p-5 border-b border-[#E8DDD0]">
@@ -44,6 +46,15 @@ export function Sidebar({ tabs, activeTab, onTabChange }: SidebarProps) {
           </button>
         ))}
       </nav>
+
+      {onLogout && (
+        <div className="p-4 border-t border-[#E8DDD0]">
+          <button onClick={onLogout} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-[#897365] hover:text-red-500 hover:bg-red-50 transition-all text-sm">
+            <LogOut className="w-4 h-4" />
+            <span>Log Out</span>
+          </button>
+        </div>
+      )}
 
       <div className="p-4 border-t border-[#E8DDD0]">
         <p className="text-xs text-[#BFA090] text-center">Words Nest © 2026</p>

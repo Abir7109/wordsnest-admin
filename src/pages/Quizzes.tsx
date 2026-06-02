@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Brain, TrendingUp, Users, BarChart3, Target, Award, Search, X, Trash2, Sparkles, CheckCircle, Loader, RefreshCw, Zap, BookOpen, Sliders, Send, Eye, EyeOff, Edit3, Clock, BarChart4 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { apiFetch } from '../api';
 
 function timeAgo(ts) {
   if (!ts) return '—';
@@ -43,13 +44,13 @@ export default function Quizzes() {
 
   const deleteQuiz = (id) => {
     if (!window.confirm('Delete this quiz record?')) return;
-    fetch(`${window.location.origin}/api/quizzes/${id}`, { method: 'DELETE' })
+    apiFetch(`${window.location.origin}/api/quizzes/${id}`, { method: 'DELETE' })
       .then(() => setQuizzes(prev => prev.filter(q => q.id !== id)));
   };
 
   const loadPoolStatus = async () => {
     try {
-      const res = await fetch(`${window.location.origin}/api/quiz-pool/status`);
+      const res = await apiFetch(`${window.location.origin}/api/quiz-pool/status`);
       const data = await res.json();
       setPoolStatus(data);
     } catch (e) {}
@@ -58,8 +59,8 @@ export default function Quizzes() {
   useEffect(() => {
     const load = () => {
       Promise.all([
-        fetch(`${window.location.origin}/api/quizzes`).then(r => r.json()),
-        fetch(`${window.location.origin}/api/quizzes/stats`).then(r => r.json()),
+        apiFetch(`${window.location.origin}/api/quizzes`).then(r => r.json()),
+        apiFetch(`${window.location.origin}/api/quizzes/stats`).then(r => r.json()),
       ]).then(([data, statsData]) => {
         setQuizzes(data.quizzes ?? []);
         setStats(statsData);
@@ -78,7 +79,7 @@ export default function Quizzes() {
     setGeneratedQuestions(null);
     setPublishSuccess(false);
     try {
-      const res = await fetch(`${window.location.origin}/api/ai/generate-quiz`, {
+      const res = await apiFetch(`${window.location.origin}/api/ai/generate-quiz`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ count: quizCount, difficulty }),
@@ -104,7 +105,7 @@ export default function Quizzes() {
     }
     setPublishing(true);
     try {
-      const res = await fetch(`${window.location.origin}/api/quiz-pool/publish`, {
+      const res = await apiFetch(`${window.location.origin}/api/quiz-pool/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ questions: editableQuestions, difficulty }),

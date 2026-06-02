@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
 import { Users, Search, BookOpen, Brain, TrendingUp, Clock, Zap, Target, Activity, UserPlus, BarChart3, Sparkles, Layers, RefreshCw } from 'lucide-react';
 import type { DashboardStats, TimelineDay, TopWord, TopSearch, WordTypeStat, RecentActivity } from '../types';
+import { apiFetch } from '../api';
 
 function timeAgo(ts) {
   const diff = Date.now() - ts;
@@ -237,12 +238,12 @@ export default function Dashboard() {
     const load = () => {
       setError(null);
       Promise.all([
-        fetch(`${window.location.origin}/api/dashboard`).then(r => { if (!r.ok) throw new Error(`/api/dashboard: HTTP ${r.status}`); return r.json(); }),
-        fetch(`${window.location.origin}/api/dashboard/timeline`).then(r => { if (!r.ok) throw new Error(`/api/timeline: HTTP ${r.status}`); return r.json(); }),
-        fetch(`${window.location.origin}/api/dashboard/top-words`).then(r => { if (!r.ok) throw new Error(`/api/top-words: HTTP ${r.status}`); return r.json(); }),
-        fetch(`${window.location.origin}/api/dashboard/top-searches`).then(r => { if (!r.ok) throw new Error(`/api/top-searches: HTTP ${r.status}`); return r.json(); }),
-        fetch(`${window.location.origin}/api/dashboard/word-types`).then(r => { if (!r.ok) throw new Error(`/api/word-types: HTTP ${r.status}`); return r.json(); }),
-        fetch(`${window.location.origin}/api/dashboard/recent-activity`).then(r => { if (!r.ok) throw new Error(`/api/activity: HTTP ${r.status}`); return r.json(); }),
+        apiFetch(`${window.location.origin}/api/dashboard`).then(r => { if (!r.ok) throw new Error(`/api/dashboard: HTTP ${r.status}`); return r.json(); }),
+        apiFetch(`${window.location.origin}/api/dashboard/timeline`).then(r => { if (!r.ok) throw new Error(`/api/timeline: HTTP ${r.status}`); return r.json(); }),
+        apiFetch(`${window.location.origin}/api/dashboard/top-words`).then(r => { if (!r.ok) throw new Error(`/api/top-words: HTTP ${r.status}`); return r.json(); }),
+        apiFetch(`${window.location.origin}/api/dashboard/top-searches`).then(r => { if (!r.ok) throw new Error(`/api/top-searches: HTTP ${r.status}`); return r.json(); }),
+        apiFetch(`${window.location.origin}/api/dashboard/word-types`).then(r => { if (!r.ok) throw new Error(`/api/word-types: HTTP ${r.status}`); return r.json(); }),
+        apiFetch(`${window.location.origin}/api/dashboard/recent-activity`).then(r => { if (!r.ok) throw new Error(`/api/activity: HTTP ${r.status}`); return r.json(); }),
       ])
         .then(([statsData, timelineData, wordsData, searchesData, typesData, activityData]) => {
           setStats(statsData);

@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import { TrendingUp, Users, BookOpen, Brain, Search, Activity, Calendar, Download } from 'lucide-react';
 import type { TimelineDay, WordTypeStat } from '../types';
+import { apiFetch } from '../api';
 
 const COLORS = ['#D48A4A', '#AA7137', '#8B5E2E', '#6B4F2E', '#C4956A', '#A08060', '#907050', '#E8C4A0'];
 
@@ -28,12 +29,12 @@ export default function Analytics() {
 
   useEffect(() => {
     Promise.all([
-      fetch(`${window.location.origin}/api/dashboard/timeline`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/dashboard/word-types`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/users/stats`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/words/stats`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/searches/stats`).then(r => r.json()),
-      fetch(`${window.location.origin}/api/quizzes/stats`).then(r => r.json()),
+      apiFetch(`${window.location.origin}/api/dashboard/timeline`).then(r => r.json()),
+      apiFetch(`${window.location.origin}/api/dashboard/word-types`).then(r => r.json()),
+      apiFetch(`${window.location.origin}/api/users/stats`).then(r => r.json()),
+      apiFetch(`${window.location.origin}/api/words/stats`).then(r => r.json()),
+      apiFetch(`${window.location.origin}/api/searches/stats`).then(r => r.json()),
+      apiFetch(`${window.location.origin}/api/quizzes/stats`).then(r => r.json()),
     ]).then(([tl, wt, us, ws, ss, qs]) => {
       setTimeline(tl.timeline || []);
       setWordTypes(wt.distribution || []);

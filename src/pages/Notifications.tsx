@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Send, Bell, Clock, CheckCircle, XCircle, History, Users, Smartphone, Trash2, RefreshCw, Sparkles, Settings, Play, Pause, Loader, Zap } from 'lucide-react';
 import type { NotificationItem } from '../types';
+import { apiFetch } from '../api';
 
 function timeAgo(ts) {
   if (!ts) return '—';
@@ -50,7 +51,7 @@ export default function Notifications() {
   const loadAiConfig = async () => {
     setAiConfigLoading(true);
     try {
-      const res = await fetch(`${window.location.origin}/api/ai/notification-agent-config`);
+      const res = await apiFetch(`${window.location.origin}/api/ai/notification-agent-config`);
       const data = await res.json();
       setAiPrompt(data.prompt || '');
       setAiEnabled(data.enabled || false);
@@ -66,7 +67,7 @@ export default function Notifications() {
     if (!aiPrompt.trim()) return;
     setAiSaving(true);
     try {
-      await fetch(`${window.location.origin}/api/ai/notification-agent-config`, {
+      await apiFetch(`${window.location.origin}/api/ai/notification-agent-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -82,7 +83,7 @@ export default function Notifications() {
   };
 
   const refreshHistory = () => {
-    fetch(`${window.location.origin}/api/admin/notifications`)
+    apiFetch(`${window.location.origin}/api/admin/notifications`)
       .then(r => r.json())
       .then(data => setHistory(data.notifications || []))
       .catch(() => {});
@@ -94,7 +95,7 @@ export default function Notifications() {
     if (targetUserId === 'specific' && !effectiveUserId.trim()) return;
     setSending(true);
     try {
-      const res = await fetch(`${window.location.origin}/api/admin/send-notification`, {
+      const res = await apiFetch(`${window.location.origin}/api/admin/send-notification`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: title.trim(), message: message.trim(), targetUserId: effectiveUserId }),

@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Search, ChevronDown, ChevronUp, BookOpen, Inbox, X, Filter, Trash2, Hash, Type, Users } from 'lucide-react';
 import type { SavedWord, WordTypeStat } from '../types';
+import { apiFetch } from '../api';
 
 export default function Words() {
   const [words, setWords] = useState([]);
@@ -14,8 +15,8 @@ export default function Words() {
   useEffect(() => {
     const load = () => {
       Promise.all([
-        fetch(`${window.location.origin}/api/words`).then(r => r.json()),
-        fetch(`${window.location.origin}/api/words/stats`).then(r => r.json()),
+        apiFetch(`${window.location.origin}/api/words`).then(r => r.json()),
+        apiFetch(`${window.location.origin}/api/words/stats`).then(r => r.json()),
       ]).then(([wordsData, statsData]) => {
         setWords(wordsData.words ?? []);
         setStats(statsData);
@@ -52,7 +53,7 @@ export default function Words() {
   const handleDelete = (wordId, e) => {
     e.stopPropagation();
     if (!window.confirm('Delete this saved word?')) return;
-    fetch(`${window.location.origin}/api/words/${wordId}`, { method: 'DELETE' })
+    apiFetch(`${window.location.origin}/api/words/${wordId}`, { method: 'DELETE' })
       .then(() => setWords(prev => prev.filter(w => w.id !== wordId)))
       .catch(() => {});
   };

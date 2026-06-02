@@ -11,7 +11,9 @@ import Analytics from './pages/Analytics';
 import LeaderboardPage from './pages/Leaderboard';
 import Reports from './pages/Reports';
 import Payments from './pages/Payments';
-import { LayoutDashboard, Users as UsersIcon, BookOpen, Search, Brain, Settings, Bell, BarChart3, Trophy, Bug, CreditCard } from 'lucide-react';
+import LoginPage from './pages/LoginPage';
+import { LayoutDashboard, Users as UsersIcon, BookOpen, Search, Brain, Settings, Bell, BarChart3, Trophy, Bug, CreditCard, LogOut } from 'lucide-react';
+import { isAdminLoggedIn, setAdminToken, getAdminToken } from './api';
 
 const tabs = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -35,6 +37,7 @@ function getTabFromHash() {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState(getTabFromHash() || 'dashboard');
+  const [loggedIn, setLoggedIn] = useState(isAdminLoggedIn());
 
   useEffect(() => {
     const onHashChange = () => {
@@ -44,6 +47,21 @@ export default function App() {
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
+
+  const handleLogin = (token: string) => {
+    setAdminToken(token);
+    setLoggedIn(true);
+  };
+
+  const handleLogout = () => {
+    setAdminToken(null);
+    setLoggedIn(false);
+    setActiveTab('dashboard');
+  };
+
+  if (!loggedIn) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
 
   const renderPage = () => {
     switch (activeTab) {
@@ -63,7 +81,7 @@ export default function App() {
   };
 
   return (
-    <Layout tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab}>
+    <Layout tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout}>
       {renderPage()}
     </Layout>
   );

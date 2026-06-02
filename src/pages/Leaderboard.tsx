@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Search, Trophy, Star, TrendingUp, Users, BookOpen, Brain, Zap, Edit3, X, Save } from 'lucide-react';
+import { apiFetch } from '../api';
 
 function timeAgo(ts) {
   if (!ts) return '—';
@@ -22,7 +23,7 @@ function EditScoreModal({ entry, onClose, onSave }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await fetch(`${window.location.origin}/api/admin/leaderboard/${entry.uid}`, {
+      await apiFetch(`${window.location.origin}/api/admin/leaderboard/${entry.uid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -118,7 +119,7 @@ export default function Leaderboard() {
 
   useEffect(() => {
     const load = () => {
-      fetch(`${window.location.origin}/api/admin/leaderboard`)
+      apiFetch(`${window.location.origin}/api/admin/leaderboard`)
         .then(r => r.json())
         .then(data => {
           setEntries(data.leaderboard ?? []);

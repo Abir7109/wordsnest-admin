@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Bug, CheckCircle, XCircle, Trash2, RefreshCw, Clock, User, Smartphone } from 'lucide-react';
+import { apiFetch } from '../api';
 
 function timeAgo(ts) {
   if (!ts) return '—';
@@ -24,7 +25,7 @@ export default function Reports() {
   }, []);
 
   const refresh = () => {
-    fetch(`${window.location.origin}/api/reports`)
+    apiFetch(`${window.location.origin}/api/reports`)
       .then(r => r.json())
       .then(data => setReports(data.reports || []))
       .catch(() => {})
@@ -33,7 +34,7 @@ export default function Reports() {
 
   const markRead = async (id) => {
     try {
-      await fetch(`${window.location.origin}/api/reports/${id}/status`, {
+      await apiFetch(`${window.location.origin}/api/reports/${id}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'read' }),
@@ -45,7 +46,7 @@ export default function Reports() {
   const deleteReport = async (id) => {
     if (!confirm('Delete this bug report?')) return;
     try {
-      await fetch(`${window.location.origin}/api/reports/${id}`, { method: 'DELETE' });
+      await apiFetch(`${window.location.origin}/api/reports/${id}`, { method: 'DELETE' });
       refresh();
     } catch (e) { console.error(e); }
   };

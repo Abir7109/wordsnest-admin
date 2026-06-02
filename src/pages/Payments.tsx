@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CreditCard, CheckCircle, XCircle, Search, Clock, Smartphone, User, RefreshCw } from 'lucide-react';
+import { apiFetch } from '../api';
 
 function timeAgo(ts) {
   if (!ts) return '—';
@@ -20,7 +21,7 @@ export default function Payments() {
   const [search, setSearch] = useState('');
 
   const load = () => {
-    fetch(`${window.location.origin}/api/admin/payments`)
+    apiFetch(`${window.location.origin}/api/admin/payments`)
       .then(r => r.json())
       .then(data => {
         setPayments(data.payments || []);
@@ -38,7 +39,7 @@ export default function Payments() {
   const verifyPayment = async (trxId, months = 1) => {
     if (!confirm(`Verify payment ${trxId} and activate ${months} month(s) subscription?`)) return;
     try {
-      await fetch(`${window.location.origin}/api/admin/payments/${trxId}/verify`, {
+      await apiFetch(`${window.location.origin}/api/admin/payments/${trxId}/verify`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ months }),

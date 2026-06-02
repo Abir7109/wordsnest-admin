@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, ChevronDown, ChevronRight, X, Mail, Smartphone, Calendar, Shield, BookOpen, Brain, Activity, Crown, Ban, Star, RefreshCw, Clock } from 'lucide-react';
+import { apiFetch } from '../api';
 
 function timeAgo(ts) {
   if (!ts) return '—';
@@ -19,7 +20,7 @@ function UserDetailModal({ phone, onClose }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${window.location.origin}/api/users/${encodeURIComponent(phone)}`)
+    apiFetch(`${window.location.origin}/api/users/${encodeURIComponent(phone)}`)
       .then(r => r.json())
       .then(data => { setDetail(data); setLoading(false); })
       .catch(() => setLoading(false));
@@ -99,6 +100,10 @@ function UserDetailModal({ phone, onClose }) {
                 <p className="text-sm text-[#2A170F]">{detail.profile?.deviceName || detail.profile?.device_model || '—'}</p>
               </div>
               <div className="bg-[#F5F0EB] rounded-xl p-4">
+                <div className="flex items-center gap-2 text-xs text-[#897365] mb-1"><Activity className="w-3 h-3" />Rate Limit Hits</div>
+                <p className="text-sm font-medium text-[#2A170F]">{detail.profile?.rateLimitHits || 0}x</p>
+              </div>
+              <div className="bg-[#F5F0EB] rounded-xl p-4">
                 <div className="flex items-center gap-2 text-xs text-[#897365] mb-1"><Calendar className="w-3 h-3" />Joined</div>
                 <p className="text-sm text-[#2A170F]">{detail.profile?.createdAt ? new Date(detail.profile.createdAt).toLocaleDateString() : '—'}</p>
               </div>
@@ -163,7 +168,7 @@ function UserDetailModal({ phone, onClose }) {
             <div className="pt-4 border-t border-[#E8DDD0]">
               <button onClick={() => {
                 if (!confirm(`Are you sure you want to permanently delete user ${phone}?\n\nThis will also delete their Firebase Auth account. This cannot be undone!`)) return;
-                fetch(`${window.location.origin}/api/users/${encodeURIComponent(phone)}`, { method: 'DELETE' })
+                apiFetch(`${window.location.origin}/api/users/${encodeURIComponent(phone)}`, { method: 'DELETE' })
                   .then(r => r.json())
                   .then(() => { onClose(); window.location.reload(); })
                   .catch(console.error);
@@ -193,7 +198,7 @@ export default function Users() {
 
   const load = () => {
     setError(null);
-    fetch(`${window.location.origin}/api/users`)
+    apiFetch(`${window.location.origin}/api/users`)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
         return r.json();
@@ -241,7 +246,7 @@ export default function Users() {
 
   const toggleLifetimeFree = (phone, current) => {
     if (!confirm(`${current ? 'Revoke' : 'Grant'} lifetime free access for ${phone}?`)) return;
-    fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/lifetime-free`, {
+    apiFetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/lifetime-free`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ grant: !current }),
@@ -253,7 +258,7 @@ export default function Users() {
 
   const toggleBan = (phone, current) => {
     if (!confirm(`${current ? 'Unban' : 'Ban'} user ${phone}?`)) return;
-    fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/ban`, {
+    apiFetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/ban`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ban: !current }),
@@ -266,7 +271,7 @@ export default function Users() {
   const toggleCooldown = (phone, currentCoolDown) => {
     if (currentCoolDown && currentCoolDown > Date.now()) {
       if (!confirm(`Remove cooldown for ${phone}? The user will be able to search again.`)) return;
-      fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/cooldown`, {
+      apiFetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/cooldown`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ remove: true }),
@@ -280,7 +285,7 @@ export default function Users() {
       const ms = parseInt(hours) * 3600000;
       if (isNaN(ms) || ms <= 0) return;
       if (!confirm(`Apply ${hours}h cooldown to ${phone}? The user won't be able to search.`)) return;
-      fetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/cooldown`, {
+      apiFetch(`${window.location.origin}/api/admin/users/${encodeURIComponent(phone)}/cooldown`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ durationMs: ms }),
@@ -392,6 +397,7 @@ export default function Users() {
               <th className="p-3 font-medium">User</th>
               <th className="p-3 font-medium">Plan</th>
               <th className="p-3 font-medium">Cooldown</th>
+              <th className="p-3 font-medium">Rate Limit</th>
               <th className="p-3 font-medium">Daily Used</th>
               <th className="p-3 font-medium">Device</th>
               <th className="p-3 font-medium">Words</th>
@@ -441,6 +447,15 @@ export default function Users() {
                       if (!remaining) return <span className="text-xs text-[#897365]">—</span>;
                       return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700"><Clock className="w-3 h-3" /> {remaining}</span>;
                     })()}
+                  </td>
+                  <td className="p-3">
+                    {user.rateLimitHits > 0 ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700" title="Times user hit 10-word limit">
+                        {user.rateLimitHits}x
+                      </span>
+                    ) : (
+                      <span className="text-xs text-[#897365]">—</span>
+                    )}
                   </td>
                   <td className="p-3 text-xs text-[#897365]">{dailyUsed}/10 {dailyDate ? `(${new Date(dailyDate).toLocaleDateString()})` : ''}</td>
                   <td className="p-3 text-xs text-[#897365] max-w-[100px] truncate" title={user.deviceName || user.device_model}>{user.deviceName || user.device_model || '—'}</td>
