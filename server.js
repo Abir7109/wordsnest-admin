@@ -1193,6 +1193,57 @@ app.post('/api/generate', requireSupabase, requireJwt, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── User Word Endpoints (Android app) ────────────────────────────────
+app.post('/api/user/words/save', requireSupabase, requireJwt, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { word, type, definition, phonetic, synonyms, antonyms, simpleSentence, complexSentence, compoundSentence } = req.body;
+    if (!word) return res.status(400).json({ error: 'Word required' });
+
+    await restUpsert('saved_words', {
+      user_id: userId, word: word.toLowerCase(), type: type || 'Noun',
+      definition: definition || '', phonetic: phonetic || '',
+      synonyms: synonyms || '', antonyms: antonyms || '',
+      simple_sentence: simpleSentence || '', complex_sentence: complexSentence || '',
+      compound_sentence: compoundSentence || '',
+      timestamp: new Date().toISOString(),
+    }, 'user_id,word');
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/user/words/:word', requireSupabase, requireJwt, async (req, res) => {
+  try {
+    await restDelete('saved_words', { user_id: `eq.${req.userId}`, word: `eq.${req.params.word.toLowerCase()}` });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/user/words', requireSupabase, requireJwt, async (req, res) => {
+  try {
+    const data = await restSelect('saved_words', '*', { user_id: `eq.${req.userId}`, order: 'timestamp.desc', limit: '200' });
+    res.json({ words: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/user/daily-usage', requireSupabase, requireJwt, async (req, res) => {
+  try {
+    const user = await restSingle('users', { id: `eq.${req.userId}`, select: '*,user_subscriptions(*)' });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const sub = user.user_subscriptions || {};
+    const premium = sub.active || sub.lifetime_free;
+    const usage = await restMaybeSingle('daily_usage', { user_id: `eq.${req.userId}`, date: `eq.${getTodayStr()}` });
+    const dailyCount = usage?.count || 0;
+    const inCooldown = user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now();
+    res.json({
+      dailyRemaining: inCooldown ? 0 : (premium ? -1 : (10 - dailyCount)),
+      dailyUsed: dailyCount, dailyLimit: premium ? -1 : 10,
+      isPremium: premium, plan: sub.plan || 'free',
+      coolDownUntil: user.cooldown_until ? new Date(user.cooldown_until).getTime() : null,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Quiz Pool ────────────────────────────────────────────────────────
 app.post('/api/admin/quiz-pool/publish', requireSupabase, async (req, res) => {
   try {
