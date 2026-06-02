@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { Client, Databases, Query } from 'node-appwrite';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
@@ -64,10 +65,23 @@ function safeError(res, e, context = '') {
   console.error(`[ERROR] ${context}:`, e);
   res.status(500).json({ error: 'Internal server error' });
 }
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://cpjeqobzdmxmjmmbunim.supabase.co';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const SB_URL = SUPABASE_URL;
-const SB_KEY = SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+const APPWRITE_ENDPOINT = process.env.APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1';
+const APPWRITE_PROJECT_ID = process.env.APPWRITE_PROJECT_ID;
+const APPWRITE_API_KEY = process.env.APPWRITE_API_KEY;
+const APPWRITE_DATABASE_ID = process.env.APPWRITE_DATABASE_ID;
+
+if (!APPWRITE_PROJECT_ID || !APPWRITE_API_KEY || !APPWRITE_DATABASE_ID) {
+  console.error('FATAL: Appwrite PROJECT_ID, API_KEY, and DATABASE_ID env vars required');
+  process.exit(1);
+}
+
+const appwriteClient = new Client()
+  .setEndpoint(APPWRITE_ENDPOINT)
+  .setProject(APPWRITE_PROJECT_ID)
+  .setKey(APPWRITE_API_KEY);
+
+const db = new Databases(appwriteClient);
+const DB_ID = APPWRITE_DATABASE_ID;
 
 // FCM via direct HTTP (no Firebase Admin SDK)
 let fcmAccessToken = null;
@@ -132,11 +146,6 @@ async function sendFcmMulticast(tokens, notification, data) {
   return { successCount: success, failureCount: failure };
 }
 
-function requireSupabase(req, res, next) {
-  if (!SB_KEY) return res.status(503).json({ error: 'Supabase not configured' });
-  next();
-}
-
 // ── JWT Helpers ──────────────────────────────────────────────────────
 function requireJwt(req, res, next) {
   const auth = req.headers.authorization;
@@ -168,245 +177,94 @@ function createToken(phone, uid, role = 'user') {
 
 // ── DB Helpers ───────────────────────────────────────────────────────
 
-async function getUserDoc(id) {
-  return restSingle('users', { id: `eq.${id}` });
+// ── Appwrite DB Helpers ──────────────────────────────────────────────
+
+// Helper to convert Appwrite doc to plain object (strip $ prefixes)
+function cleanDoc(doc) {
+  if (!doc) return null;
+  const { $id, $createdAt, $updatedAt, $permissions, $collectionId, $databaseId, ...rest } = doc;
+  return { id: $id, createdAt: $createdAt, updatedAt: $updatedAt, ...rest };
 }
 
-function getTodayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function cleanDocs(docs) {
+  return docs.map(d => cleanDoc(d));
 }
 
-function getDayStart(ts = Date.now()) {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function getDaysAgo(n) {
-  return getDayStart() - n * 86400000;
-}
-
-function formatDateLabel(ts) {
-  const d = new Date(ts);
-  return `${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]} ${d.getDate()}`;
-}
-
-function sanitize(str) {
-  if (!str) return '';
-  return String(str).replace(/<[^>]*>/g, '').trim().substring(0, 500);
-}
-
-function isPremium(user) {
-  if (!user) return false;
-  if (user.lifetime_free) return true;
-  if (user.subscription?.active && user.subscription?.expiresAt > Date.now()) return true;
-  return false;
-}
-
-// Direct REST API helpers (bypasses supabase-js client overhead)
-function sbUrl(table, params) {
-  const url = new URL(`${SB_URL}/rest/v1/${table}`);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  return url.toString();
-}
-
-async function restCount(table, extraParams = {}) {
-  if (!SB_KEY) return 0;
+async function awGet(coll, id) {
   try {
-    const url = sbUrl(table, { select: 'id', limit: '0', ...extraParams });
-    const resp = await fetch(url, {
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Prefer: 'count=exact' },
-    });
-    const range = resp.headers.get('content-range');
-    if (!range) return 0;
-    return parseInt(range.split('/')[1], 10) || 0;
-  } catch { return 0; }
+    const doc = await db.getDocument(DB_ID, coll, id);
+    return cleanDoc(doc);
+  } catch { return null; }
 }
 
-async function restSelect(table, selectCols = '*', extraParams = {}) {
-  if (!SB_KEY) return [];
+async function awFind(coll, queries = []) {
   try {
-    const url = sbUrl(table, { select: selectCols, ...extraParams });
-    const resp = await fetch(url, {
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
-    });
-    return await resp.json();
+    const res = await db.listDocuments(DB_ID, coll, [...queries, Query.limit(1)]);
+    return res.documents.length > 0 ? cleanDoc(res.documents[0]) : null;
+  } catch { return null; }
+}
+
+async function awList(coll, queries = []) {
+  try {
+    let allDocs = [];
+    let offset = 0;
+    const limit = 100;
+    while (true) {
+      const res = await db.listDocuments(DB_ID, coll, [...queries, Query.limit(limit), Query.offset(offset)]);
+      allDocs = allDocs.concat(res.documents);
+      if (res.documents.length < limit) break;
+      offset += limit;
+    }
+    return cleanDocs(allDocs);
   } catch { return []; }
 }
 
-async function safeCount(table) {
-  return restCount(table);
-}
-
-async function safeFilterCount(table, column, value, tsColumn, since) {
-  return restCount(table, { [column]: `eq.${value}`, [tsColumn]: `gte.${new Date(since).toISOString()}` });
-}
-
-// ── REST Write Helpers ────────────────────────────────────────────────
-async function restSingle(table, params = {}) {
-  if (!SB_KEY) return null;
+async function awCount(coll, queries = []) {
   try {
-    const url = sbUrl(table, { ...params, limit: '1' });
-    const resp = await fetch(url, {
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Accept: 'application/vnd.pgrst.object+json' },
-    });
-    if (resp.status === 406) return null;
-    return await resp.json();
-  } catch { return null; }
+    const res = await db.listDocuments(DB_ID, coll, [...queries, Query.limit(0)]);
+    return res.total;
+  } catch { return 0; }
 }
 
-async function restMaybeSingle(table, params = {}) {
-  if (!SB_KEY) return null;
+async function awCreate(coll, id, data) {
+  return cleanDoc(await db.createDocument(DB_ID, coll, id, data));
+}
+
+async function awUpdate(coll, id, data) {
+  return cleanDoc(await db.updateDocument(DB_ID, coll, id, data));
+}
+
+async function awDelete(coll, id) {
   try {
-    const url = sbUrl(table, { ...params, limit: '1' });
-    const resp = await fetch(url, {
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
-    });
-    const data = await resp.json();
-    return data?.length > 0 ? data[0] : null;
-  } catch { return null; }
-}
-
-async function restInsert(table, body) {
-  if (!SB_KEY) return null;
-  const resp = await fetch(`${SB_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) throw new Error(`restInsert ${table} failed: ${resp.status} ${await resp.text().catch(() => '')}`);
-  return await resp.json();
-}
-
-async function restUpdate(table, body, params = {}) {
-  if (!SB_KEY) return;
-  const url = sbUrl(table, params);
-  const resp = await fetch(url, {
-    method: 'PATCH',
-    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) throw new Error(`restUpdate ${table} failed: ${resp.status} ${await resp.text().catch(() => '')}`);
-}
-
-async function restDelete(table, params = {}) {
-  if (!SB_KEY) return;
-  const url = sbUrl(table, params);
-  const resp = await fetch(url, {
-    method: 'DELETE',
-    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
-  });
-  if (!resp.ok) throw new Error(`restDelete ${table} failed: ${resp.status} ${await resp.text().catch(() => '')}`);
-}
-
-async function restUpsert(table, body, conflictColumn = 'id') {
-  if (!SB_KEY) return null;
-  const url = sbUrl(table, { on_conflict: conflictColumn });
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json',
-      Prefer: 'resolution=merge-duplicates,return=representation',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) throw new Error(`restUpsert ${table} failed: ${resp.status} ${await resp.text().catch(() => '')}`);
-  return await resp.json();
-}
-
-async function authAdminDeleteUser(uid) {
-  if (!SB_KEY) return false;
-  try {
-    const resp = await fetch(`${SB_URL}/auth/v1/admin/users/${uid}`, {
-      method: 'DELETE',
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
-    });
-    return resp.ok;
+    await db.deleteDocument(DB_ID, coll, id);
+    return true;
   } catch { return false; }
 }
 
-async function authAdminCreateUser(body) {
-  if (!SB_KEY) return null;
+async function awUpsert(coll, id, data) {
   try {
-    const payload = {
-      email: body.email,
-      password: body.password,
-      data: { ...(body.user_metadata || {}), phone: body.phone || '' },
-    };
-    const resp = await fetch(`${SB_URL}/auth/v1/signup`, {
-      method: 'POST',
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const text = await resp.text();
-    const data = JSON.parse(text);
-    if (resp.ok && (data.id || data.user?.id)) {
-      return { user: { id: data.id || data.user.id } };
+    return await awCreate(coll, id, data);
+  } catch (e) {
+    if (e.code === 409) {
+      return await awUpdate(coll, id, data);
     }
-    console.error('authAdminCreateUser response:', resp.status, text);
-    return { msg: (data.msg || data.error || data.error_description || `HTTP ${resp.status}`) };
-  } catch (e) { console.error('authAdminCreateUser error:', e); return null; }
+    throw e;
+  }
 }
 
-async function authGetUser(token) {
-  try {
-    const resp = await fetch(`${SB_URL}/auth/v1/user`, {
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${token}` },
-    });
-    return await resp.json();
-  } catch { return null; }
-}
-
-async function checkAndUpdateDailyUsage(userId) {
-  const today = getTodayStr();
-  const user = await restSingle('users', { id: `eq.${userId}` });
-  if (!user) return { allowed: false, remaining: 0, reason: 'User not found' };
-
-  const sub = await restMaybeSingle('user_subscriptions', { user_id: `eq.${userId}` });
-  if (sub && (sub.active || sub.lifetime_free)) return { allowed: true, remaining: -1, isPremium: true };
-
-  if (user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now()) {
-    return { allowed: false, remaining: 0, reason: 'cool_down' };
-  }
-
-  const usage = await restMaybeSingle('daily_usage', { user_id: `eq.${userId}`, date: `eq.${today}` });
-  const count = usage?.count || 0;
-
-  if (count >= 10) {
-    const cooldownUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await restUpdate('users', { cooldown_until: cooldownUntil }, { id: `eq.${userId}` });
-    // Increment rate-limit hit counter for admin visibility
-    await restUpdate('users', { rate_limit_hits: (user.rate_limit_hits || 0) + 1 }, { id: `eq.${userId}` });
-    return { allowed: false, remaining: 0, reason: 'limit_reached' };
-  }
-
-  await restUpsert('daily_usage', { user_id: userId, date: today, count: count + 1 }, 'user_id,date');
-  await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${userId}` });
-
-  return { allowed: true, remaining: 9 - count, isPremium: false };
-}
-
-function countByDay(docs, field = 'timestamp') {
-  const dayMap = {};
-  for (const d of docs) {
-    const ts = d[field] ? new Date(d[field]).getTime() : 0;
-    if (!ts) continue;
-    const day = getDayStart(ts);
-    dayMap[day] = (dayMap[day] || 0) + 1;
-  }
-  return dayMap;
+async function awGetUser(id) {
+  return awGet('users', id);
 }
 
 // ── Health ───────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => res.json({ status: 'ok', supabase: !!SB_KEY }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', appwrite: true }));
 app.get('/api/server-time', (req, res) => res.json({ serverTime: Date.now() }));
 app.get('/api/ping-keep-alive', (req, res) => res.json({ pong: Date.now() }));
 
 // ── Dashboard ────────────────────────────────────────────────────────
 const dashCache = { data: null, ts: 0, TTL: 120000 };
 
-app.get('/api/dashboard', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/dashboard', requireAdmin, async (req, res) => {
   try {
     if (dashCache.data && Date.now() - dashCache.ts < dashCache.TTL) {
       return res.json(dashCache.data);
@@ -418,16 +276,16 @@ app.get('/api/dashboard', requireSupabase, requireAdmin, async (req, res) => {
     const yesterdayIso = new Date(getDaysAgo(1)).toISOString();
 
     const results = await Promise.all([
-      restCount('users'),
-      restCount('search_events'),
-      restCount('installs'),
-      restCount('users', { last_active: `gte.${dayAgo}` }),
-      restCount('users', { created_at: `gte.${todayStart}` }),
-      restCount('search_events', { timestamp: `gte.${todayStart}` }),
-      restCount('users', { created_at: `lte.${weekAgoIso}` }),
-      restCount('users', { last_active: `gte.${yesterdayIso}`, created_at: `lte.${weekAgoIso}` }),
-      restCount('saved_words'),
-      restCount('quiz_attempts'),
+      awCount('users'),
+      awCount('search_events'),
+      awCount('installs'),
+      awCount('users', [Query.greaterThan('last_active', dayAgo)]),
+      awCount('users', [Query.greaterThan('created_at', todayStart)]),
+      awCount('search_events', [Query.greaterThan('timestamp', todayStart)]),
+      awCount('users', [Query.lessThan('created_at', weekAgoIso)]),
+      awCount('users', [Query.greaterThan('last_active', yesterdayIso), Query.lessThan('created_at', weekAgoIso)]),
+      awCount('saved_words'),
+      awCount('quiz_attempts'),
     ]);
 
     const [users, searches, installs, activeUsers, newUsersToday, searchesToday, usersBeforeWeek, retained, words, quizzes] = results;
@@ -436,12 +294,12 @@ app.get('/api/dashboard', requireSupabase, requireAdmin, async (req, res) => {
     const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
 
     const [wordsTodayCount, quizzesTodayCount, savedTypesData, savedWordsData, searchWordsData, quizScoresData] = await Promise.all([
-      restCount('saved_words', { timestamp: `gte.${todayStart}` }).catch(() => 0),
-      restCount('quiz_attempts', { timestamp: `gte.${todayStart}` }).catch(() => 0),
-      restSelect('saved_words', 'type', { limit: '2000' }),
-      restSelect('saved_words', 'word', { limit: '2000' }),
-      restSelect('search_events', 'word', { timestamp: `gte.${weekAgoIso}`, limit: '50000' }),
-      restSelect('quiz_attempts', 'score', { limit: '1000' }),
+      awCount('saved_words', [Query.greaterThan('timestamp', todayStart)]).catch(() => 0),
+      awCount('quiz_attempts', [Query.greaterThan('timestamp', todayStart)]).catch(() => 0),
+      awList('saved_words', [Query.limit(2000)]),
+      awList('saved_words', [Query.limit(2000)]),
+      awList('search_events', [Query.greaterThan('timestamp', weekAgoIso), Query.limit(50000)]),
+      awList('quiz_attempts', [Query.limit(1000)]),
     ]);
 
     const typeDist = {};
@@ -468,15 +326,15 @@ app.get('/api/dashboard', requireSupabase, requireAdmin, async (req, res) => {
   } catch (e) { safeError(res, e, 'dashboard'); }
 });
 
-app.get('/api/dashboard/timeline', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/dashboard/timeline', requireAdmin, async (req, res) => {
   try {
     const sinceTs = new Date(getDaysAgo(6)).toISOString();
     const days = 7;
 
     const [usersAll, searchesAll, activeUsers] = await Promise.all([
-      restSelect('users', 'created_at', { created_at: `gte.${sinceTs}` }),
-      restSelect('search_events', 'timestamp', { timestamp: `gte.${sinceTs}` }),
-      restSelect('users', 'last_active', { last_active: `gte.${sinceTs}` }),
+      awList('users', [Query.greaterThan('created_at', sinceTs)]),
+      awList('search_events', [Query.greaterThan('timestamp', sinceTs)]),
+      awList('users', [Query.greaterThan('last_active', sinceTs)]),
     ]);
 
     const usersByDay = countByDay(usersAll.map(d => ({ timestamp: d.created_at })));
@@ -499,28 +357,28 @@ app.get('/api/dashboard/timeline', requireSupabase, requireAdmin, async (req, re
   } catch { res.json({ timeline: [] }); }
 });
 
-app.get('/api/dashboard/top-words', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/dashboard/top-words', requireAdmin, async (req, res) => {
   try {
-    const data = await restSelect('saved_words', 'word,count', { limit: '2000' });
+    const data = await awList('saved_words', [Query.limit(2000)]);
     const freq = {};
     for (const w of data || []) { const wl = w.word?.toLowerCase(); if (wl) freq[wl] = (freq[wl] || 0) + 1; }
     const topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 10);
     res.json({ topWords });
   } catch { res.json({ topWords: [] }); }
 });
-app.get('/api/dashboard/top-searches', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/dashboard/top-searches', requireAdmin, async (req, res) => {
   try {
     const weekAgo = new Date(getDaysAgo(7)).toISOString();
-    const data = await restSelect('search_events', 'word', { timestamp: `gte.${weekAgo}`, limit: '50000' });
+    const data = await awList('search_events', [Query.greaterThan('timestamp', weekAgo), Query.limit(50000)]);
     const freq = {};
     for (const s of data || []) { const w = s.word?.toLowerCase(); if (w) freq[w] = (freq[w] || 0) + 1; }
     const topSearches = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 10);
     res.json({ topSearches });
   } catch { res.json({ topSearches: [] }); }
 });
-app.get('/api/dashboard/word-types', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/dashboard/word-types', requireAdmin, async (req, res) => {
   try {
-    const data = await restSelect('saved_words', 'type', { limit: '2000' });
+    const data = await awList('saved_words', [Query.limit(2000)]);
     const dist = {};
     for (const w of data || []) { if (w.type) dist[w.type] = (dist[w.type] || 0) + 1; }
     const distribution = Object.entries(dist).map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count);
@@ -528,9 +386,9 @@ app.get('/api/dashboard/word-types', requireSupabase, requireAdmin, async (req, 
   } catch { res.json({ distribution: [] }); }
 });
 
-app.get('/api/dashboard/recent-activity', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/dashboard/recent-activity', requireAdmin, async (req, res) => {
   try {
-    const users = await restSelect('users', 'id,username,created_at', { order: 'created_at.desc', limit: '5' });
+    const users = await awList('users', [Query.orderDesc('created_at'), Query.limit(5)]);
     const activities = (users || []).map(u => ({
       type: 'user_signup', userId: u.id,
       username: u.username || 'Unknown',
@@ -541,13 +399,13 @@ app.get('/api/dashboard/recent-activity', requireSupabase, requireAdmin, async (
 });
 
 // ── Users ────────────────────────────────────────────────────────────
-app.get('/api/users', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/users', requireAdmin, async (req, res) => {
   try {
     const [users, subs, wordCounts, quizCounts] = await Promise.all([
-      restSelect('users', '*', { order: 'last_active.desc', limit: '100' }),
-      restSelect('user_subscriptions', '*', { limit: '5000' }),
-      restSelect('saved_words', 'user_id', { limit: '50000' }),
-      restSelect('quiz_attempts', 'user_id', { limit: '50000' }),
+      awList('users', [Query.orderDesc('last_active'), Query.limit(100)]),
+      awList('user_subscriptions', [Query.limit(5000)]),
+      awList('saved_words', [Query.limit(50000)]),
+      awList('quiz_attempts', [Query.limit(50000)]),
     ]);
     const subMap = {};
     for (const s of subs || []) subMap[s.user_id] = { plan: s.plan, active: s.active, lifetimeFree: s.lifetime_free, expiresAt: s.expires_at, dailyUsage: s.daily_usage };
@@ -563,37 +421,36 @@ app.get('/api/users', requireSupabase, requireAdmin, async (req, res) => {
   } catch (e) { safeError(res, e, 'users-list'); }
 });
 
-app.delete('/api/users/:identifier', requireSupabase, requireAdmin, async (req, res) => {
+app.delete('/api/users/:identifier', requireAdmin, async (req, res) => {
   try {
     const { identifier } = req.params;
-    const user = await restMaybeSingle('users', { id: `eq.${identifier}` });
+    const user = await awGet('users', identifier);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     if (user.fcm_token) {
       await sendFcm(user.fcm_token, { title: 'Account Deleted', body: 'Your account has been permanently deleted.' }, { type: 'force_logout' });
     }
 
-    await authAdminDeleteUser(identifier);
     res.json({ success: true, message: 'User permanently deleted.' });
   } catch (e) { safeError(res, e, 'users-delete'); }
 });
 
-app.get('/api/users/stats/aggregate', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/users/stats/aggregate', requireAdmin, async (req, res) => {
   try {
     const [total, active, statusData, newToday, newWeek, newMonth, countsByVersion] = await Promise.all([
-      safeCount('users'),
-      safeFilterCount('users', 'status', 'active', 'last_active', getDaysAgo(1)),
+      awCount('users'),
+      awCount('users', [Query.equal('status', 'active'), Query.greaterThan('last_active', getDaysAgo(1))]),
       (async () => {
-        const activeC = await restCount('users', { status: 'eq.active' });
-        const inactiveC = await restCount('users', { status: 'eq.inactive' });
+        const activeC = await awCount('users', [Query.equal('status', 'active')]);
+        const inactiveC = await awCount('users', [Query.equal('status', 'inactive')]);
         return { active: activeC, inactive: inactiveC };
       })(),
-      safeFilterCount('users', 'status', 'active', 'created_at', getDayStart()),
-      safeFilterCount('users', 'status', 'active', 'created_at', getDaysAgo(7)),
-      safeFilterCount('users', 'status', 'active', 'created_at', getDaysAgo(30)),
+      awCount('users', [Query.equal('status', 'active'), Query.greaterThan('created_at', getDayStart())]),
+      awCount('users', [Query.equal('status', 'active'), Query.greaterThan('created_at', getDaysAgo(7))]),
+      awCount('users', [Query.equal('status', 'active'), Query.greaterThan('created_at', getDaysAgo(30))]),
       (async () => {
         try {
-          const data = await restSelect('users', 'app_version', { limit: '50000' });
+          const data = await awList('users', [Query.limit(50000)]);
           const counts = {};
           for (const u of data || []) { const v = u.app_version || 'unknown'; counts[v] = (counts[v] || 0) + 1; }
           return counts;
@@ -605,20 +462,20 @@ app.get('/api/users/stats/aggregate', requireSupabase, requireAdmin, async (req,
   } catch (e) { safeError(res, e, 'users-stats-aggregate'); }
 });
 
-app.get('/api/users/:phone', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/users/:phone', requireAdmin, async (req, res) => {
   try {
     const { phone } = req.params;
-    let user = await restSingle('users', { id: `eq.${sanitize(phone)}` });
-    if (!user) user = await restMaybeSingle('users', { phone: `eq.${sanitize(phone)}` });
+    let user = await awGet('users', sanitize(phone));
+    if (!user) user = await awFind('users', [Query.equal('phone', sanitize(phone))]);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const uid = user.id;
     const [wordsData, quizzesData, searchData] = await Promise.all([
-      restSelect('saved_words', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '100' }),
-      restSelect('quiz_attempts', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '50' }),
-      restSelect('search_history', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '50' }),
+      awList('saved_words', [Query.equal('user_id', uid), Query.orderDesc('timestamp'), Query.limit(100)]),
+      awList('quiz_attempts', [Query.equal('user_id', uid), Query.orderDesc('timestamp'), Query.limit(50)]),
+      awList('search_history', [Query.equal('user_id', uid), Query.orderDesc('timestamp'), Query.limit(50)]),
     ]);
-    const sub = await restMaybeSingle('user_subscriptions', { user_id: `eq.${uid}` }) || {};
+    const sub = await awFind('user_subscriptions', [Query.equal('user_id', uid)]) || {};
 
     res.json({
       profile: { uid, ...user, subscription: { plan: sub.plan, active: sub.active, lifetimeFree: sub.lifetime_free, expiresAt: sub.expires_at ? new Date(sub.expires_at).getTime() : null, dailyUsage: sub.daily_usage }, banned: user.status === 'banned', coolDownUntil: user.cooldown_until ? new Date(user.cooldown_until).getTime() : null, rateLimitHits: user.rate_limit_hits || 0, deviceName: user.device_name, lastActive: new Date(user.last_active).getTime(), createdAt: new Date(user.created_at).getTime() },
@@ -630,41 +487,41 @@ app.get('/api/users/:phone', requireSupabase, requireAdmin, async (req, res) => 
 });
 
 // ── Saved Words ──────────────────────────────────────────────────────
-app.get('/api/words', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/words', requireAdmin, async (req, res) => {
   try {
-    const data = await restSelect('saved_words', '*', { order: 'timestamp.desc', limit: '200' });
+    const data = await awList('saved_words', [Query.orderDesc('timestamp'), Query.limit(200)]);
     res.json({ words: data || [] });
   } catch (e) { safeError(res, e, 'words-list'); }
 });
 
-app.delete('/api/words/:id', requireSupabase, async (req, res) => {
+app.delete('/api/words/:id', async (req, res) => {
   try {
-    await restDelete('saved_words', { id: `eq.${req.params.id}` });
+    await awDelete('saved_words', req.params.id);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'words-delete'); }
 });
 
-app.get('/api/words/delete/:id', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/words/delete/:id', requireAdmin, async (req, res) => {
   try {
-    await restDelete('saved_words', { id: `eq.${req.params.id}` });
+    await awDelete('saved_words', req.params.id);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'words-delete'); }
 });
 
-app.get('/api/words/stats', requireSupabase, async (req, res) => {
+app.get('/api/words/stats', async (req, res) => {
   try {
     const todayStart = new Date(getDayStart()).toISOString();
     const weekAgo = new Date(getDaysAgo(7)).toISOString();
-    const total = await safeCount('saved_words');
-    const todayC = await restCount('saved_words', { timestamp: `gte.${todayStart}` });
-    const weekC = await restCount('saved_words', { timestamp: `gte.${weekAgo}` });
+    const total = await awCount('saved_words');
+    const todayC = await awCount('saved_words', [Query.greaterThan('timestamp', todayStart)]);
+    const weekC = await awCount('saved_words', [Query.greaterThan('timestamp', weekAgo)]);
     let typeDist = {}, topWords = [], uniqueWords = 0;
     try {
-      const data = await restSelect('saved_words', 'type', { limit: '2000' });
+      const data = await awList('saved_words', [Query.limit(2000)]);
       for (const w of data || []) { if (w.type) typeDist[w.type] = (typeDist[w.type] || 0) + 1; }
     } catch {}
     try {
-      const data = await restSelect('saved_words', 'word,type', { limit: '2000' });
+      const data = await awList('saved_words', [Query.limit(2000)]);
       const freq = {};
       for (const w of data || []) { const wl = w.word?.toLowerCase(); if (wl) { freq[wl] = (freq[wl] || 0) + 1; } }
       uniqueWords = Object.keys(freq).length;
@@ -675,30 +532,30 @@ app.get('/api/words/stats', requireSupabase, async (req, res) => {
 });
 
 // ── Searches ─────────────────────────────────────────────────────────
-app.get('/api/searches', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/searches', requireAdmin, async (req, res) => {
   try {
-    const data = await restSelect('search_events', '*', { order: 'timestamp.desc', limit: '200' });
+    const data = await awList('search_events', [Query.orderDesc('timestamp'), Query.limit(200)]);
     res.json({ searches: data || [] });
   } catch (e) { safeError(res, e, 'searches-list'); }
 });
 
-app.delete('/api/searches/:id', requireSupabase, async (req, res) => {
+app.delete('/api/searches/:id', async (req, res) => {
   try {
-    await restDelete('search_events', { id: `eq.${req.params.id}` });
+    await awDelete('search_events', req.params.id);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'searches-delete'); }
 });
 
-app.get('/api/searches/stats', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/searches/stats', requireAdmin, async (req, res) => {
   try {
-    const total = await safeCount('search_events');
+    const total = await awCount('search_events');
     const todayStart = new Date(getDayStart()).toISOString();
     const weekAgo = new Date(getDaysAgo(7)).toISOString();
-    const todayC = await restCount('search_events', { timestamp: `gte.${todayStart}` });
-    const weekC = await restCount('search_events', { timestamp: `gte.${weekAgo}` });
+    const todayC = await awCount('search_events', [Query.greaterThan('timestamp', todayStart)]);
+    const weekC = await awCount('search_events', [Query.greaterThan('timestamp', weekAgo)]);
     let topWords = [];
     try {
-      const data = await restSelect('search_events', 'word', { timestamp: `gte.${weekAgo}`, limit: '50000' });
+      const data = await awList('search_events', [Query.greaterThan('timestamp', weekAgo), Query.limit(50000)]);
       const freq = {};
       for (const s of data || []) { const w = s.word?.toLowerCase(); if (w) freq[w] = (freq[w] || 0) + 1; }
       topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
@@ -708,36 +565,41 @@ app.get('/api/searches/stats', requireSupabase, requireAdmin, async (req, res) =
 });
 
 // ── Quizzes ──────────────────────────────────────────────────────────
-app.get('/api/quizzes', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/quizzes', requireAdmin, async (req, res) => {
   try {
-    const data = await restSelect('quiz_attempts', '*,users!inner(username,email)', { order: 'timestamp.desc', limit: '200' });
-    res.json({ quizzes: data || [] });
+    const data = await awList('quiz_attempts', [Query.orderDesc('timestamp'), Query.limit(200)]);
+    const enriched = [];
+    for (const q of data || []) {
+      const u = q.user_id ? await awGet('users', q.user_id).catch(() => null) : null;
+      enriched.push({ ...q, username: u?.username || '', email: u?.email || '' });
+    }
+    res.json({ quizzes: enriched });
   } catch (e) { safeError(res, e, 'quizzes-list'); }
 });
 
-app.delete('/api/quizzes/:id', requireSupabase, requireAdmin, async (req, res) => {
+app.delete('/api/quizzes/:id', requireAdmin, async (req, res) => {
   try {
-    await restDelete('quiz_attempts', { id: `eq.${req.params.id}` });
+    await awDelete('quiz_attempts', req.params.id);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'quizzes-delete'); }
 });
 
-app.get('/api/quizzes/stats', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/quizzes/stats', requireAdmin, async (req, res) => {
   try {
-    const total = await safeCount('quiz_attempts');
+    const total = await awCount('quiz_attempts');
     const todayStart = new Date(getDayStart()).toISOString();
     const weekAgo = new Date(getDaysAgo(7)).toISOString();
-    const todayC = await restCount('quiz_attempts', { timestamp: `gte.${todayStart}` });
-    const weekC = await restCount('quiz_attempts', { timestamp: `gte.${weekAgo}` });
+    const todayC = await awCount('quiz_attempts', [Query.greaterThan('timestamp', todayStart)]);
+    const weekC = await awCount('quiz_attempts', [Query.greaterThan('timestamp', weekAgo)]);
     let scores = [];
     try {
-      const data = await restSelect('quiz_attempts', 'score', { limit: '1000' });
+      const data = await awList('quiz_attempts', [Query.limit(1000)]);
       scores = (data || []).map(q => q.score).filter(s => s !== null && s !== undefined);
     } catch {}
     const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
     const highest = scores.length > 0 ? Math.max(...scores) : 0;
     const lowest = scores.length > 0 ? Math.min(...scores) : 0;
-    const participants = await restCount('quiz_attempts', { select: 'user_id' });
+    const participants = await awCount('quiz_attempts');
     const scoreDist = {};
     for (const s of scores) { const r = s >= 80 ? '80-100' : s >= 60 ? '60-79' : s >= 40 ? '40-59' : '0-39'; scoreDist[r] = (scoreDist[r] || 0) + 1; }
     res.json({ total, today: todayC, thisWeek: weekC, averageScore: avg, highestScore: highest, lowestScore: lowest, totalParticipants: participants, scoreDistribution: Object.entries(scoreDist).map(([range, count]) => ({ range, count })) });
@@ -745,22 +607,22 @@ app.get('/api/quizzes/stats', requireSupabase, requireAdmin, async (req, res) =>
 });
 
 // ── Leaderboard ──────────────────────────────────────────────────────
-app.get('/api/leaderboard', requireSupabase, async (req, res) => {
+app.get('/api/leaderboard', async (req, res) => {
   try {
-    const users = await restSelect('users', 'id,username,emoji,leaderboard_streak,leaderboard_manual_score', { limit: '5000' });
-    const searches = await restSelect('search_events', 'user_id', { limit: '50000' });
-    const words = await restSelect('saved_words', 'user_id', { limit: '50000' });
-    const quizzes = await restSelect('quiz_attempts', 'user_id,score', { limit: '50000' });
+    const usersDocs = await awList('users', [Query.limit(5000)]);
+    const searchesDocs = await awList('search_events', [Query.limit(50000)]);
+    const wordsDocs = await awList('saved_words', [Query.limit(50000)]);
+    const quizzesDocs = await awList('quiz_attempts', [Query.limit(50000)]);
 
     const searchCounts = {}, wordCounts = {}, quizScores = {};
-    for (const s of searches || []) searchCounts[s.user_id] = (searchCounts[s.user_id] || 0) + 1;
-    for (const w of words || []) wordCounts[w.user_id] = (wordCounts[w.user_id] || 0) + 1;
-    for (const q of quizzes || []) {
+    for (const s of searchesDocs || []) searchCounts[s.user_id] = (searchCounts[s.user_id] || 0) + 1;
+    for (const w of wordsDocs || []) wordCounts[w.user_id] = (wordCounts[w.user_id] || 0) + 1;
+    for (const q of quizzesDocs || []) {
       if (!quizScores[q.user_id]) quizScores[q.user_id] = 0;
       quizScores[q.user_id] += q.score;
     }
 
-    const entries = (users || []).map(u => {
+    const entries = (usersDocs || []).map(u => {
       const s = searchCounts[u.id] || 0;
       const score = Math.min(s, 5) * 2 + (quizScores[u.id] || 0) + (u.leaderboard_streak || 0) * 3 + (u.leaderboard_manual_score || 0);
       return {
@@ -777,7 +639,7 @@ app.get('/api/leaderboard', requireSupabase, async (req, res) => {
 });
 
 // Admin leaderboard (same, different route)
-app.get('/api/leaderboard/admin', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/leaderboard/admin', requireAdmin, async (req, res) => {
   try {
     const resp = await fetch(`${req.protocol}://${req.get('host')}/api/leaderboard`);
     const data = await resp.json();
@@ -785,33 +647,33 @@ app.get('/api/leaderboard/admin', requireSupabase, requireAdmin, async (req, res
   } catch (e) { safeError(res, e, 'leaderboard-admin'); }
 });
 
-app.post('/api/leaderboard/update', requireSupabase, requireAdmin, async (req, res) => {
+app.post('/api/leaderboard/update', requireAdmin, async (req, res) => {
   try {
     const { userId, manualScore, streak } = req.body;
     const updates = {};
     if (manualScore !== undefined) updates.leaderboard_manual_score = manualScore;
     if (streak !== undefined) updates.leaderboard_streak = streak;
-    await restUpdate('users', updates, { id: `eq.${userId}` });
+    await awUpdate('users', userId, updates);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'leaderboard-update'); }
 });
 
-app.put('/api/admin/leaderboard/:uid', requireSupabase, requireAdmin, async (req, res) => {
+app.put('/api/admin/leaderboard/:uid', requireAdmin, async (req, res) => {
   try {
     const { uid } = req.params;
     const { manualScore, streak } = req.body;
     const updates = {};
     if (manualScore !== undefined) updates.leaderboard_manual_score = manualScore;
     if (streak !== undefined) updates.leaderboard_streak = streak;
-    await restUpdate('users', updates, { id: `eq.${uid}` });
+    await awUpdate('users', uid, updates);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'leaderboard-admin-update'); }
 });
 
 // ── App Config ───────────────────────────────────────────────────────
-app.get('/api/app-config', requireSupabase, async (req, res) => {
+app.get('/api/app-config', async (req, res) => {
   try {
-    const data = await restSingle('app_config', { id: `eq.1` });
+    const data = await awGet('app_config', '1');
     if (!data) return res.json({});
     res.json({
       isAppAlive: data.is_app_alive ?? true,
@@ -841,27 +703,28 @@ app.get('/api/app-config', requireSupabase, async (req, res) => {
   } catch (e) { safeError(res, e, 'app-config-get'); }
 });
 
-app.post('/api/app-config', requireSupabase, requireAdmin, async (req, res) => {
+app.post('/api/app-config', requireAdmin, async (req, res) => {
   try {
-    await restUpdate('app_config', req.body, { id: `eq.1` });
+    await awUpdate('app_config', '1', req.body);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'app-config-update'); }
 });
 
 // ── Notifications ────────────────────────────────────────────────────
-app.post('/api/notifications/send', requireSupabase, requireAdmin, async (req, res) => {
+app.post('/api/notifications/send', requireAdmin, async (req, res) => {
   try {
     const { title, message, targetUserId } = req.body;
+    const notifId = crypto.randomUUID();
     if (targetUserId) {
-      const user = await restSingle('users', { id: `eq.${targetUserId}` });
+      const user = await awGet('users', targetUserId);
       if (!user?.fcm_token) return res.status(400).json({ error: 'User has no FCM token' });
       await sendFcm(user.fcm_token, { title, body: message }, { type: 'admin_notification' });
-      await restInsert('global_notifications', { title, message, sentAt: new Date().toISOString(), success: true, sentCount: 1, deliveredCount: 1 });
+      await awCreate('global_notifications', notifId, { title, message, sentAt: new Date().toISOString(), success: true, sentCount: 1, deliveredCount: 1 });
     } else {
-      const users = await restSelect('users', 'fcm_token', { status: 'eq.active', fcm_token: 'not.is.null' });
+      const users = await awList('users', [Query.equal('status', 'active'), Query.limit(5000)]);
       const tokens = (users || []).map(u => u.fcm_token).filter(Boolean);
       const result = await sendFcmMulticast(tokens, { title, body: message }, { type: 'admin_notification' });
-      await restInsert('global_notifications', {
+      await awCreate('global_notifications', notifId, {
         title, message, sentAt: new Date().toISOString(), success: true,
         sentCount: tokens.length, deliveredCount: result.successCount,
       });
@@ -870,81 +733,75 @@ app.post('/api/notifications/send', requireSupabase, requireAdmin, async (req, r
   } catch (e) { safeError(res, e, 'notifications-send'); }
 });
 
-app.get('/api/notifications', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/notifications', requireAdmin, async (req, res) => {
   try {
-    const data = await restSelect('global_notifications', '*', { order: 'sent_at.desc', limit: '50' });
+    const data = await awList('global_notifications', [Query.orderDesc('sent_at'), Query.limit(50)]);
     res.json({ notifications: data || [] });
   } catch (e) { safeError(res, e, 'notifications-list'); }
 });
 
 // ── Experiences ──────────────────────────────────────────────────────
-app.get('/api/experiences', requireSupabase, async (req, res) => {
+app.get('/api/experiences', async (req, res) => {
   try {
-    const data = await restSelect('experiences', '*', { order: 'timestamp.desc', limit: '50' });
+    const data = await awList('experiences', [Query.orderDesc('timestamp'), Query.limit(50)]);
     res.json({ experiences: data || [] });
   } catch (e) { safeError(res, e, 'experiences-list'); }
 });
 
-app.post('/api/experiences', requireSupabase, requireAdmin, async (req, res) => {
+app.post('/api/experiences', requireAdmin, async (req, res) => {
   try {
-    await restInsert('experiences', { ...req.body, timestamp: new Date().toISOString() });
+    await awCreate('experiences', crypto.randomUUID(), { ...req.body, timestamp: new Date().toISOString() });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'experiences-create'); }
 });
 
-app.delete('/api/admin/experiences/:id', requireSupabase, requireAdmin, async (req, res) => {
+app.delete('/api/admin/experiences/:id', requireAdmin, async (req, res) => {
   try {
-    await restDelete('experiences', { id: `eq.${req.params.id}` });
+    await awDelete('experiences', req.params.id);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'experiences-delete'); }
 });
 
 // ── FCM Token Registration ──────────────────────────────────────────
-app.post('/api/register-fcm', requireSupabase, async (req, res) => {
+app.post('/api/register-fcm', async (req, res) => {
   try {
     const { userId, fcmToken } = req.body;
-    await restUpdate('users', { fcm_token: fcmToken }, { id: `eq.${userId}` });
-    await restUpdate('installs', { fcm_token: fcmToken }, { user_id: `eq.${userId}` });
+    await awUpdate('users', userId, { fcm_token: fcmToken });
+    const installDoc = await awFind('installs', [Query.equal('user_id', userId)]);
+    if (installDoc) await awUpdate('installs', installDoc.id, { fcm_token: fcmToken });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'register-fcm'); }
 });
 
 // ── Auth ─────────────────────────────────────────────────────────────
-app.post('/api/auth/exchange-token', requireSupabase, async (req, res) => {
+app.post('/api/auth/exchange-token', async (req, res) => {
   try {
-    const { supabaseToken } = req.body;
-    if (!supabaseToken) return res.status(400).json({ error: 'Supabase token required' });
+    const { uid, email, phone } = req.body;
+    if (!uid) return res.status(400).json({ error: 'User ID required' });
 
-    const user = await authGetUser(supabaseToken);
-    if (!user?.id) return res.status(401).json({ error: 'Invalid token' });
-
-    const uid = user.id;
-    const email = user.email || '';
-    const phone = user.phone || uid;
-
-    const existing = await getUserDoc(uid);
+    const existing = await awGet('users', uid);
     if (!existing) {
       const now = new Date().toISOString();
-      await restUpsert('users', {
-        id: uid, email, phone, username: email.split('@')[0] || uid,
+      const userEmail = email || '';
+      await awCreate('users', uid, {
+        email: userEmail, phone: phone || uid, username: userEmail.split('@')[0] || uid,
         status: 'active', created_at: now, last_active: now,
       });
     } else {
-      await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${uid}` });
+      await awUpdate('users', uid, { last_active: new Date().toISOString() });
     }
-    await restUpsert('user_subscriptions',
-      { user_id: uid, plan: 'free', active: false, lifetime_free: false },
-      'user_id'
+    await awUpsert('user_subscriptions',
+      uid, { user_id: uid, plan: 'free', active: false, lifetime_free: false }
     );
 
-    const token = createToken(phone, uid);
-    const username = existing?.username || email.split('@')[0] || uid;
-    res.json({ success: true, token, uid, email, phone, username, isNewUser: !existing });
+    const token = createToken(phone || uid, uid);
+    const username = existing?.username || (email || '').split('@')[0] || uid;
+    res.json({ success: true, token, uid, email: email || '', phone: phone || uid, username, isNewUser: !existing });
   } catch (e) { safeError(res, e, 'auth-exchange'); }
 });
 
 // Phone + password registration (legacy)
-app.post('/api/auth/register', requireSupabase, async (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   try {
     const { phone, username, password, deviceName } = req.body;
     if (!phone || !username || !password) return res.status(400).json({ error: 'Phone, username, and password required' });
@@ -953,13 +810,13 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
     const cleanPhone = sanitize(phone);
     const cleanUsername = sanitize(username);
 
-    const existing = await restMaybeSingle('users', { phone: `eq.${cleanPhone}` });
+    const existing = await awFind('users', [Query.equal('phone', cleanPhone)]);
     if (existing) {
       const hashedPassword = await bcrypt.hash(password, 10);
-      await restUpdate('users', {
+      await awUpdate('users', existing.id, {
         username: cleanUsername, password_hash: hashedPassword,
         device_name: sanitize(deviceName || ''), last_active: new Date().toISOString(),
-      }, { id: `eq.${existing.id}` });
+      });
 
       const token = createToken(cleanPhone, existing.id);
       return res.json({ success: true, phone: cleanPhone, username: cleanUsername, token, uid: existing.id });
@@ -969,16 +826,14 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
     const now = new Date().toISOString();
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await restInsert('users', {
-      id: uid,
+    await awCreate('users', uid, {
       phone: cleanPhone, username: cleanUsername, password_hash: hashedPassword,
       device_name: sanitize(deviceName || ''), status: 'active',
       created_at: now, last_active: now, app_version: req.body.appVersion || '2.0.0',
     });
 
-    await restUpsert('user_subscriptions',
-      { user_id: uid, plan: 'free', active: false, lifetime_free: false },
-      'user_id'
+    await awUpsert('user_subscriptions',
+      uid, { user_id: uid, plan: 'free', active: false, lifetime_free: false }
     );
 
     const token = createToken(cleanPhone, uid);
@@ -988,26 +843,26 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
 });
 
 // Legacy phone sign-in
-app.post('/api/auth/phone-signin', requireSupabase, async (req, res) => {
+app.post('/api/auth/phone-signin', async (req, res) => {
   try {
     const { phone, password } = req.body;
     if (!phone || !password) return res.status(400).json({ error: 'Phone and password required' });
 
     const cleanPhone = sanitize(phone);
-    const user = await restSingle('users', { phone: `eq.${cleanPhone}` });
+    const user = await awFind('users', [Query.equal('phone', cleanPhone)]);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
     const valid = await bcrypt.compare(password, user.password_hash || '');
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
-    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${user.id}` });
+    await awUpdate('users', user.id, { last_active: new Date().toISOString() });
     const token = createToken(cleanPhone, user.id);
     res.json({ success: true, token, username: user.username, uid: user.id });
   } catch (e) { safeError(res, e, 'phone-signin'); }
 });
 
 // ── Subscription ─────────────────────────────────────────────────────
-app.post('/api/subscribe', requireSupabase, requireJwt, async (req, res) => {
+app.post('/api/subscribe', requireJwt, async (req, res) => {
   try {
     const { trxId } = req.body;
     if (!trxId?.trim()) return res.status(400).json({ error: 'Transaction ID is required' });
@@ -1015,32 +870,32 @@ app.post('/api/subscribe', requireSupabase, requireJwt, async (req, res) => {
     const cleanTrxId = sanitize(trxId);
     const userId = req.userId;
 
-    const user = await restSingle('users', { id: `eq.${userId}` });
+    const user = await awGet('users', userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const existingPay = await restMaybeSingle('user_payments', { trx_id: `eq.${cleanTrxId}` });
+    const existingPay = await awFind('user_payments', [Query.equal('trx_id', cleanTrxId)]);
     if (existingPay) return res.status(409).json({ error: 'This Transaction ID has already been submitted' });
 
-    await restInsert('user_payments', {
+    await awCreate('user_payments', crypto.randomUUID(), {
       user_id: userId, trx_id: cleanTrxId, amount: 100, date: new Date().toISOString(),
       verified: false,
     });
-    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${userId}` });
+    await awUpdate('users', userId, { last_active: new Date().toISOString() });
 
     res.json({ success: true, message: 'Payment submitted. Awaiting admin verification.' });
   } catch (e) { safeError(res, e, 'subscribe'); }
 });
 
-app.get('/api/subscription/status', requireSupabase, requireJwt, async (req, res) => {
+app.get('/api/subscription/status', requireJwt, async (req, res) => {
   try {
     const userId = req.userId;
-    const user = await restSingle('users', { id: `eq.${userId}` });
+    const user = await awGet('users', userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const sub = user.user_subscriptions || {};
+    const sub = await awFind('user_subscriptions', [Query.equal('user_id', userId)]) || {};
     const premium = sub.active || sub.lifetime_free;
 
-    const usage = await restMaybeSingle('daily_usage', { user_id: `eq.${userId}`, date: `eq.${getTodayStr()}` });
+    const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', getTodayStr())]);
     const dailyCount = usage?.count || 0;
     const inCooldown = user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now();
 
@@ -1056,45 +911,43 @@ app.get('/api/subscription/status', requireSupabase, requireJwt, async (req, res
   } catch (e) { safeError(res, e, 'subscription-status'); }
 });
 
-app.post('/api/admin/login', requireSupabase, async (req, res) => {
+app.post('/api/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
-    const resp = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
-      method: 'POST',
-      headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await resp.json();
-    if (!data.user || !data.access_token) return res.status(401).json({ error: 'Invalid credentials' });
-
     const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
-    if (data.user.email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Not authorized as admin' });
+    if (email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Not authorized as admin' });
 
-    const token = jwt.sign({ role: 'admin', uid: data.user.id, email: data.user.email }, JWT_SECRET, { expiresIn: '24h' });
-    res.json({ success: true, token, user: { id: data.user.id, email: data.user.email } });
+    const adminUser = await awFind('users', [Query.equal('email', email)]);
+    if (!adminUser) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const valid = await bcrypt.compare(password, adminUser.password_hash || '');
+    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+
+    const token = jwt.sign({ role: 'admin', uid: adminUser.id, email: adminUser.email }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ success: true, token, user: { id: adminUser.id, email: adminUser.email } });
   } catch (e) { safeError(res, e, 'admin-login'); }
 });
 
 // ── Admin Endpoints ──────────────────────────────────────────────────
-app.put('/api/admin/users/:phone/lifetime-free', requireSupabase, requireAdmin, async (req, res) => {
+app.put('/api/admin/users/:phone/lifetime-free', requireAdmin, async (req, res) => {
   try {
     const { phone } = req.params;
     const { grant } = req.body;
-    const user = await restSingle('users', { phone: `eq.${sanitize(phone)}` });
+    const user = await awFind('users', [Query.equal('phone', sanitize(phone))]);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    await restUpsert('user_subscriptions', {
+    await awUpsert('user_subscriptions', user.id, {
       user_id: user.id, plan: grant ? 'lifetime' : 'free',
       active: !!grant, lifetime_free: !!grant,
       expires_at: null, verified_by: req.headers['x-admin-id'] || 'admin',
       verified_at: grant ? new Date().toISOString() : null,
-    }, 'user_id');
-    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${user.id}` });
+    });
+    await awUpdate('users', user.id, { last_active: new Date().toISOString() });
 
     if (grant) {
-      const u = await restSingle('users', { id: `eq.${user.id}` });
+      const u = await awGet('users', user.id);
       if (u?.fcm_token) {
         await sendFcm(u.fcm_token, { title: '🌟 Lifetime Free Granted!', body: 'Congratulations! You now have lifetime free access.' }, { type: 'subscription_update' });
       }
@@ -1103,67 +956,72 @@ app.put('/api/admin/users/:phone/lifetime-free', requireSupabase, requireAdmin, 
   } catch (e) { safeError(res, e, 'admin-lifetime-free'); }
 });
 
-app.put('/api/admin/users/:phone/ban', requireSupabase, requireAdmin, async (req, res) => {
+app.put('/api/admin/users/:phone/ban', requireAdmin, async (req, res) => {
   try {
     const { phone } = req.params;
     const { ban } = req.body;
-    const user = await restSingle('users', { phone: `eq.${sanitize(phone)}` });
+    const user = await awFind('users', [Query.equal('phone', sanitize(phone))]);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    await restUpdate('users', { status: ban ? 'banned' : 'active', last_active: new Date().toISOString() }, { id: `eq.${user.id}` });
+    await awUpdate('users', user.id, { status: ban ? 'banned' : 'active', last_active: new Date().toISOString() });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'admin-ban'); }
 });
 
-app.put('/api/admin/users/:phone/cooldown', requireSupabase, requireAdmin, async (req, res) => {
+app.put('/api/admin/users/:phone/cooldown', requireAdmin, async (req, res) => {
   try {
     const { phone } = req.params;
     const { cooldownMinutes, remove, durationMs } = req.body;
-    const user = await restSingle('users', { phone: `eq.${sanitize(phone)}` });
+    const user = await awFind('users', [Query.equal('phone', sanitize(phone))]);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     if (remove || cooldownMinutes === null || cooldownMinutes <= 0) {
-      await restUpdate('users', { cooldown_until: null }, { id: `eq.${user.id}` });
-      await restUpsert('daily_usage', { user_id: user.id, date: getTodayStr(), count: 0 }, 'user_id,date');
+      await awUpdate('users', user.id, { cooldown_until: null });
+      await awUpsert('daily_usage', `${user.id}_${getTodayStr()}`, { user_id: user.id, date: getTodayStr(), count: 0 });
     } else {
       const minutes = durationMs ? Math.ceil(durationMs / 60000) : (cooldownMinutes || 60);
       const until = new Date(Date.now() + minutes * 60 * 1000).toISOString();
-      await restUpdate('users', { cooldown_until: until }, { id: `eq.${user.id}` });
+      await awUpdate('users', user.id, { cooldown_until: until });
     }
     res.json({ success: true, serverTime: Date.now() });
   } catch (e) { safeError(res, e, 'admin-cooldown'); }
 });
 
-app.get('/api/admin/payments', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/admin/payments', requireAdmin, async (req, res) => {
   try {
-    const data = await restSelect('user_payments', '*,users(username,device_name)', { order: 'date.desc' });
-    res.json({ payments: data || [] });
+    const data = await awList('user_payments', [Query.orderDesc('date')]);
+    const enriched = [];
+    for (const p of data || []) {
+      const u = p.user_id ? await awGet('users', p.user_id).catch(() => null) : null;
+      enriched.push({ ...p, username: u?.username || '', device_name: u?.device_name || '' });
+    }
+    res.json({ payments: enriched });
   } catch (e) { safeError(res, e, 'admin-payments'); }
 });
 
-app.post('/api/admin/verify-payment', requireSupabase, requireAdmin, async (req, res) => {
+app.post('/api/admin/verify-payment', requireAdmin, async (req, res) => {
   try {
     const { trxId } = req.body;
     const cleanTrx = sanitize(trxId);
 
-    const payment = await restSingle('user_payments', { trx_id: `eq.${cleanTrx}`, select: '*,users!inner(id,fcm_token)' });
+    const payment = await awFind('user_payments', [Query.equal('trx_id', cleanTrx)]);
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
 
     const userId = payment.user_id;
 
-    await restUpdate('user_payments', {
+    await awUpdate('user_payments', payment.id, {
       verified: true, verified_by: req.headers['x-admin-id'] || 'admin',
       verified_at: new Date().toISOString(),
-    }, { trx_id: `eq.${cleanTrx}` });
+    });
 
-    await restUpsert('user_subscriptions', {
+    await awUpsert('user_subscriptions', userId, {
       user_id: userId, plan: 'lifetime', active: true, lifetime_free: true,
       expires_at: null, verified_by: req.headers['x-admin-id'] || 'admin',
       verified_at: new Date().toISOString(),
-    }, 'user_id');
+    });
 
-    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${userId}` });
+    await awUpdate('users', userId, { last_active: new Date().toISOString() });
 
-    const user = await restSingle('users', { id: `eq.${userId}` });
+    const user = await awGet('users', userId);
     if (user?.fcm_token) {
       await sendFcm(user.fcm_token, { title: '✅ Payment Verified!', body: 'Your subscription is now active. Thank you!' }, { type: 'payment_verified' });
     }
@@ -1173,16 +1031,16 @@ app.post('/api/admin/verify-payment', requireSupabase, requireAdmin, async (req,
 });
 
 // ── Reports ──────────────────────────────────────────────────────────
-app.get('/api/reports', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/reports', requireAdmin, async (req, res) => {
   try {
-    const data = await restSelect('reports', '*', { order: 'timestamp.desc', limit: '100' });
+    const data = await awList('reports', [Query.orderDesc('timestamp'), Query.limit(100)]);
     res.json({ reports: data || [] });
   } catch (e) { safeError(res, e, 'reports-list'); }
 });
 
-app.post('/api/reports', requireSupabase, async (req, res) => {
+app.post('/api/reports', async (req, res) => {
   try {
-    await restInsert('reports', {
+    await awCreate('reports', crypto.randomUUID(), {
       message: req.body.message, username: req.body.username || '',
       userId: req.body.userId || '', appVersion: req.body.appVersion || 'unknown',
       timestamp: new Date().toISOString(), status: 'unread',
@@ -1191,22 +1049,22 @@ app.post('/api/reports', requireSupabase, async (req, res) => {
   } catch (e) { safeError(res, e, 'reports-create'); }
 });
 
-app.put('/api/admin/reports/:id/read', requireSupabase, requireAdmin, async (req, res) => {
+app.put('/api/admin/reports/:id/read', requireAdmin, async (req, res) => {
   try {
-    await restUpdate('reports', { status: 'read' }, { id: `eq.${req.params.id}` });
+    await awUpdate('reports', req.params.id, { status: 'read' });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'reports-mark-read'); }
 });
 
-app.delete('/api/admin/reports/:id', requireSupabase, requireAdmin, async (req, res) => {
+app.delete('/api/admin/reports/:id', requireAdmin, async (req, res) => {
   try {
-    await restDelete('reports', { id: `eq.${req.params.id}` });
+    await awDelete('reports', req.params.id);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'reports-delete'); }
 });
 
 // ── AI Analyze ───────────────────────────────────────────────────────
-app.post('/api/ai-analyze', requireSupabase, requireJwt, async (req, res) => {
+app.post('/api/ai-analyze', requireJwt, async (req, res) => {
   try {
     const { word } = req.body;
     if (!word) return res.status(400).json({ error: 'Word required' });
@@ -1225,7 +1083,7 @@ app.post('/api/ai-analyze', requireSupabase, requireJwt, async (req, res) => {
 
     let config = { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
     try {
-      const d = await restSingle('app_config', { id: `eq.1`, select: 'ai_provider,ai_model,ai_gemini_model,ai_enabled' });
+      const d = await awGet('app_config', '1');
       if (d) config = { ...config, aiProvider: d.ai_provider, aiModel: d.ai_model, aiGeminiModel: d.ai_gemini_model, aiEnabled: d.ai_enabled };
     } catch {}
 
@@ -1268,8 +1126,8 @@ app.post('/api/ai-analyze', requireSupabase, requireJwt, async (req, res) => {
     if (!aiResult) return res.status(502).json({ error: 'AI analysis failed' });
 
     // Log search event
-    await restInsert('search_events', { user_id: userId, word, timestamp: new Date().toISOString() });
-    await restInsert('search_history', { user_id: userId, word, timestamp: new Date().toISOString() });
+    await awCreate('search_events', crypto.randomUUID(), { user_id: userId, word, timestamp: new Date().toISOString() });
+    await awCreate('search_history', crypto.randomUUID(), { user_id: userId, word, timestamp: new Date().toISOString() });
 
     res.json({
       ...aiResult, _meta: { dailyRemaining: limit.remaining, isPremium: limit.isPremium || false },
@@ -1277,7 +1135,7 @@ app.post('/api/ai-analyze', requireSupabase, requireJwt, async (req, res) => {
   } catch (e) { safeError(res, e, 'ai-analyze'); }
 });
 
-app.post('/api/ai/generate-quiz', requireSupabase, async (req, res) => {
+app.post('/api/ai/generate-quiz', async (req, res) => {
   try {
     const { count = 5, difficulty = 'medium' } = req.body;
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -1286,7 +1144,7 @@ app.post('/api/ai/generate-quiz', requireSupabase, async (req, res) => {
 
     let config = { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
     try {
-      const d = await restSingle('app_config', { id: `eq.1`, select: 'ai_provider,ai_model,ai_gemini_model,ai_enabled' });
+      const d = await awGet('app_config', '1');
       if (d) config = { ...config, aiProvider: d.ai_provider, aiModel: d.ai_model, aiGeminiModel: d.ai_gemini_model, aiEnabled: d.ai_enabled };
     } catch {}
     if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
@@ -1325,7 +1183,7 @@ app.post('/api/ai/generate-quiz', requireSupabase, async (req, res) => {
   } catch (e) { safeError(res, e, 'ai-generate-quiz'); }
 });
 
-app.post('/api/generate', requireSupabase, requireJwt, async (req, res) => {
+app.post('/api/generate', requireJwt, async (req, res) => {
   try {
     const { type, prompt: userPrompt } = req.body;
     const userId = req.userId;
@@ -1333,7 +1191,7 @@ app.post('/api/generate', requireSupabase, requireJwt, async (req, res) => {
 
     let config = { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiEnabled: true };
     try {
-      const d = await restSingle('app_config', { id: `eq.1`, select: 'ai_provider,ai_model,ai_enabled' });
+      const d = await awGet('app_config', '1');
       if (d) config = { ...config, aiProvider: d.ai_provider, aiModel: d.ai_model, aiEnabled: d.ai_enabled };
     } catch {}
     if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
@@ -1353,46 +1211,47 @@ app.post('/api/generate', requireSupabase, requireJwt, async (req, res) => {
 });
 
 // ── User Word Endpoints (Android app) ────────────────────────────────
-app.post('/api/user/words/save', requireSupabase, requireJwt, async (req, res) => {
+app.post('/api/user/words/save', requireJwt, async (req, res) => {
   try {
     const userId = req.userId;
     const { word, type, definition, phonetic, synonyms, antonyms, simpleSentence, complexSentence, compoundSentence } = req.body;
     if (!word) return res.status(400).json({ error: 'Word required' });
 
-    await restUpsert('saved_words', {
-      user_id: userId, word: word.toLowerCase(), type: type || 'Noun',
+    await awUpsert('saved_words', `${userId}_${(word || '').toLowerCase()}`, {
+      user_id: userId, word: (word || '').toLowerCase(), type: type || 'Noun',
       definition: definition || '', phonetic: phonetic || '',
       synonyms: synonyms || '', antonyms: antonyms || '',
       simple_sentence: simpleSentence || '', complex_sentence: complexSentence || '',
       compound_sentence: compoundSentence || '',
       timestamp: new Date().toISOString(),
-    }, 'user_id,word');
+    });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'user-words-save'); }
 });
 
-app.delete('/api/user/words/:word', requireSupabase, requireJwt, async (req, res) => {
+app.delete('/api/user/words/:word', requireJwt, async (req, res) => {
   try {
-    await restDelete('saved_words', { user_id: `eq.${req.userId}`, word: `eq.${req.params.word.toLowerCase()}` });
+    const wordDoc = await awFind('saved_words', [Query.equal('user_id', req.userId), Query.equal('word', req.params.word.toLowerCase())]);
+    if (wordDoc) await awDelete('saved_words', wordDoc.id);
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'user-words-delete'); }
 });
 
-app.get('/api/user/words', requireSupabase, requireJwt, async (req, res) => {
+app.get('/api/user/words', requireJwt, async (req, res) => {
   try {
-    const data = await restSelect('saved_words', '*', { user_id: `eq.${req.userId}`, order: 'timestamp.desc', limit: '200' });
+    const data = await awList('saved_words', [Query.equal('user_id', req.userId), Query.orderDesc('timestamp'), Query.limit(200)]);
     res.json({ words: data || [] });
   } catch (e) { safeError(res, e, 'user-words-list'); }
 });
 
-app.get('/api/user/daily-usage', requireSupabase, requireJwt, async (req, res) => {
+app.get('/api/user/daily-usage', requireJwt, async (req, res) => {
   try {
-    const user = await restSingle('users', { id: `eq.${req.userId}` });
+    const user = await awGet('users', req.userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const sub = await restMaybeSingle('user_subscriptions', { user_id: `eq.${req.userId}` }) || {};
+    const sub = await awFind('user_subscriptions', [Query.equal('user_id', req.userId)]) || {};
     const premium = sub.active || sub.lifetime_free;
-    const usage = await restMaybeSingle('daily_usage', { user_id: `eq.${req.userId}`, date: `eq.${getTodayStr()}` });
+    const usage = await awFind('daily_usage', [Query.equal('user_id', req.userId), Query.equal('date', getTodayStr())]);
     const dailyCount = usage?.count || 0;
     const inCooldown = user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now();
     res.json({
@@ -1406,72 +1265,73 @@ app.get('/api/user/daily-usage', requireSupabase, requireJwt, async (req, res) =
 });
 
 // ── Quiz Pool ────────────────────────────────────────────────────────
-app.post('/api/quiz-pool/publish', requireSupabase, requireAdmin, async (req, res) => {
+app.post('/api/quiz-pool/publish', requireAdmin, async (req, res) => {
   try {
     const { questions } = req.body;
     if (!Array.isArray(questions) || questions.length === 0) return res.status(400).json({ error: 'Questions array required' });
 
     // Delete existing pool
-    await restDelete('quiz_pool', { id: `not.eq.00000000-0000-0000-0000-000000000000` });
+    const allPool = await awList('quiz_pool');
+    for (const q of allPool) await awDelete('quiz_pool', q.id);
     const now = new Date().toISOString();
     const records = questions.map((q, i) => ({
       word: q.word || null, question: q.question, options: q.options, correct_index: q.correctIndex,
       hint: q.hint || null, difficulty: q.difficulty || 'medium', created_at: now, index: i,
     }));
-    if (records.length) await restInsert('quiz_pool', records);
+    for (const r of records) await awCreate('quiz_pool', crypto.randomUUID(), r);
     res.json({ success: true, count: records.length });
   } catch (e) { safeError(res, e, 'quiz-pool-publish'); }
 });
 
-app.get('/api/quiz-pool', requireSupabase, async (req, res) => {
+app.get('/api/quiz-pool', async (req, res) => {
   try {
-    const data = await restSelect('quiz_pool', '*', { order: 'created_at.desc', limit: '10' });
+    const data = await awList('quiz_pool', [Query.orderDesc('created_at'), Query.limit(10)]);
     res.json({ questions: data || [] });
   } catch (e) { safeError(res, e, 'quiz-pool'); }
 });
 
-app.get('/api/quiz-pool/status', requireSupabase, async (req, res) => {
+app.get('/api/quiz-pool/status', async (req, res) => {
   try {
-    const data = await restSelect('quiz_pool', 'word,created_at', { order: 'created_at.desc', limit: '40' });
+    const data = await awList('quiz_pool', [Query.orderDesc('created_at'), Query.limit(40)]);
     const pool = data || [];
     res.json({ hasQuiz: pool.length > 0, count: pool.length, generatedAt: pool[0]?.created_at || null, generatedWords: [...new Set(pool.map(q => q.word).filter(Boolean))] });
   } catch (e) { safeError(res, e, 'quiz-pool-status'); }
 });
 
 // ── AI Notification Agent Config ─────────────────────────────────────
-app.get('/api/ai-notification-agent', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/ai-notification-agent', requireAdmin, async (req, res) => {
   try {
-    const data = await restSingle('ai_notification_agent', { id: `eq.1` });
+    const data = await awGet('ai_notification_agent', '1');
     res.json(data || {});
   } catch { res.json({}); }
 });
 
-app.post('/api/ai-notification-agent', requireSupabase, requireAdmin, async (req, res) => {
+app.post('/api/ai-notification-agent', requireAdmin, async (req, res) => {
   try {
-    await restUpdate('ai_notification_agent', {
+    await awUpdate('ai_notification_agent', '1', {
       prompt: req.body.prompt, enabled: req.body.enabled, interval_minutes: req.body.intervalMinutes,
       time_of_day: req.body.timeOfDay, updated_at: new Date().toISOString(),
       last_sent_at: req.body.lastSentAt, next_send_at: req.body.nextSendAt,
-    }, { id: `eq.1` });
+    });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'ai-notification-agent-post'); }
 });
 
 // ── AI Notification Scheduler (called by cron) ───────────────────────
-app.post('/api/ai-notification-tick', requireSupabase, async (req, res) => {
+app.post('/api/ai-notification-tick', async (req, res) => {
   try {
-    const agent = await restSingle('ai_notification_agent', { id: `eq.1` });
+    const agent = await awGet('ai_notification_agent', '1');
     if (!agent || !agent.enabled) return res.json({ skipped: true, reason: 'disabled' });
 
     const now = Date.now();
     const nextSend = agent.next_send_at ? new Date(agent.next_send_at).getTime() : 0;
     if (nextSend > now) return res.json({ skipped: true, reason: 'not yet' });
 
-    const users = await restSelect('users', 'fcm_token', { status: 'eq.active', fcm_token: 'not.is.null' });
-    const tokens = (users || []).map(u => u.fcm_token).filter(Boolean);
+    const users = await awList('users', [Query.equal('status', 'active'), Query.limit(5000)]);
+    const tokens = users.map(u => u.fcm_token).filter(Boolean);
     if (!tokens.length) return res.json({ skipped: true, reason: 'no users' });
 
-    const recentSearches = await restSelect('search_events', 'word', { timestamp: `gte.${new Date(now - 3600000).toISOString()}` });
+    const recentSearches = await awList('search_events', [Query.greaterThan('timestamp', new Date(now - 3600000).toISOString())]);
     const recentWords = [...new Set((recentSearches || []).map(s => s.word?.toLowerCase()).filter(Boolean))];
 
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -1496,66 +1356,66 @@ app.post('/api/ai-notification-tick', requireSupabase, async (req, res) => {
     const result = await sendFcmMulticast(tokens, { title: '📖 Words Nest', body: message }, { type: 'ai_notification' });
 
     const notifId = `ai_${now}`;
-    await restInsert('global_notifications', {
-      id: notifId, title: 'AI Notification', message,
-      target: 'ai_automation', sentAt: new Date(now).toISOString(),
-      success: true, sentCount: tokens.length, deliveredCount: result.successCount,
-      aiGenerated: true, aiPrompt: agent.prompt,
+    await awCreate('global_notifications', notifId, {
+      title: 'AI Notification', message,
+      target: 'ai_automation', sent_at: new Date(now).toISOString(),
+      success: true, sent_count: tokens.length, delivered_count: result.successCount,
+      ai_generated: true, ai_prompt: agent.prompt,
     });
 
     const interval = (agent.interval_minutes || 60) * 60 * 1000;
-    await restUpdate('ai_notification_agent', {
+    await awUpdate('ai_notification_agent', '1', {
       last_sent_at: new Date(now).toISOString(),
       next_send_at: new Date(now + interval).toISOString(),
-    }, { id: `eq.1` });
+    });
 
     res.json({ success: true, sent: result.successCount, failed: result.failureCount });
   } catch (e) { safeError(res, e, 'ai-notification-tick'); }
 });
 
 // ── iOS Waitlist ─────────────────────────────────────────────────────
-app.get('/api/waitlist/count', requireSupabase, async (req, res) => {
+app.get('/api/waitlist/count', async (req, res) => {
   try {
-    const count = await safeCount('waitlist_ios');
+    const count = await awCount('waitlist_ios');
     res.json({ count });
   } catch (e) { safeError(res, e, 'waitlist-count'); }
 });
 
-app.post('/api/waitlist/join', requireSupabase, async (req, res) => {
+app.post('/api/waitlist/join', async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email required' });
 
-    const existing = await restMaybeSingle('waitlist_ios', { email: `eq.${email.toLowerCase()}` });
+    const existing = await awFind('waitlist_ios', [Query.equal('email', email.toLowerCase())]);
     if (existing) return res.status(409).json({ error: 'Already on waitlist' });
 
-    await restInsert('waitlist_ios', { email: email.toLowerCase(), created_at: new Date().toISOString() });
+    await awCreate('waitlist_ios', crypto.randomUUID(), { email: email.toLowerCase(), created_at: new Date().toISOString() });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'waitlist-join'); }
 });
 
 // ── Android App Notifications (per-user) ─────────────────────────────
-app.get('/api/notifications/:userId', requireSupabase, async (req, res) => {
+app.get('/api/notifications/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const data = await restSelect('user_notifications', '*', { user_id: `eq.${userId}`, order: 'created_at.desc', limit: '20' });
+    const data = await awList('user_notifications', [Query.equal('user_id', userId), Query.orderDesc('created_at'), Query.limit(20)]);
     res.json({ notifications: data || [] });
   } catch (e) { safeError(res, e, 'notifications-user'); }
 });
 
-app.put('/api/notifications/:userId/read/:notificationId', requireSupabase, async (req, res) => {
+app.put('/api/notifications/:userId/read/:notificationId', async (req, res) => {
   try {
-    await restUpdate('user_notifications', { is_read: true }, { id: `eq.${req.params.notificationId}`, user_id: `eq.${req.params.userId}` });
+    await awUpdate('user_notifications', req.params.notificationId, { is_read: true });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'notifications-mark-read'); }
 });
 
 // ── Install Analytics ────────────────────────────────────────────────
-app.get('/api/installs/stats', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/installs/stats', requireAdmin, async (req, res) => {
   try {
-    const total = await safeCount('installs');
-    const users = await restSelect('users', 'status', { limit: '50000' });
-    const active = (users || []).filter(u => u.status === 'active').length;
+    const total = await awCount('installs');
+    const usersData = await awList('users', [Query.limit(50000)]);
+    const active = (usersData || []).filter(u => u.status === 'active').length;
     res.json({ totalInstalls: total, activeUsers: active });
   } catch (e) { safeError(res, e, 'installs-stats'); }
 });
@@ -1568,51 +1428,52 @@ function proxy(req, res, targetUrl, method = 'POST') {
     .then(r => r.json().then(d => res.json(d)).catch(() => res.status(r.status).json({})))
     .catch(e => { console.error('[ERROR] proxy:', e); res.status(500).json({ error: 'Internal server error' }); });
 }
-app.get('/api/admin/notifications', requireSupabase, requireAdmin, (req, res) => {
+app.get('/api/admin/notifications', requireAdmin, (req, res) => {
   fetch(`${apiHost}/api/notifications`).then(r => r.json()).then(d => res.json(d)).catch(e => res.json({ notifications: [] }));
 });
-app.post('/api/admin/send-notification', requireSupabase, requireAdmin, (req, res) => proxy(req, res, `${apiHost}/api/notifications/send`));
-app.get('/api/admin/leaderboard', requireSupabase, requireAdmin, (req, res) => {
+app.post('/api/admin/send-notification', requireAdmin, (req, res) => proxy(req, res, `${apiHost}/api/notifications/send`));
+app.get('/api/admin/leaderboard', requireAdmin, (req, res) => {
   fetch(`${apiHost}/api/leaderboard/admin`).then(r => r.json()).then(d => res.json(d)).catch(e => res.json({ leaderboard: [] }));
 });
-app.put('/api/reports/:id/status', requireSupabase, requireAdmin, async (req, res) => {
-  try { await restUpdate('reports', { status: 'read' }, { id: `eq.${req.params.id}` }); res.json({ success: true }); } catch (e) { safeError(res, e, 'reports-status'); }
+app.put('/api/reports/:id/status', requireAdmin, async (req, res) => {
+  try { await awUpdate('reports', req.params.id, { status: 'read' }); res.json({ success: true }); } catch (e) { safeError(res, e, 'reports-status'); }
 });
-app.delete('/api/reports/:id', requireSupabase, requireAdmin, async (req, res) => {
-  try { await restDelete('reports', { id: `eq.${req.params.id}` }); res.json({ success: true }); } catch (e) { safeError(res, e, 'reports-delete'); }
+app.delete('/api/reports/:id', requireAdmin, async (req, res) => {
+  try { await awDelete('reports', req.params.id); res.json({ success: true }); } catch (e) { safeError(res, e, 'reports-delete'); }
 });
-app.put('/api/admin/payments/:trxId/verify', requireSupabase, requireAdmin, async (req, res) => {
+app.put('/api/admin/payments/:trxId/verify', requireAdmin, async (req, res) => {
   try {
     const trxId = req.params.trxId;
-    const payment = await restSingle('user_payments', { trx_id: `eq.${sanitize(trxId)}`, select: '*,users!inner(id,fcm_token)' });
+    const payment = await awFind('user_payments', [Query.equal('trx_id', sanitize(trxId))]);
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
     const userId = payment.user_id;
-    await restUpdate('user_payments', { verified: true, verified_by: req.headers['x-admin-id'] || 'admin', verified_at: new Date().toISOString() }, { trx_id: `eq.${sanitize(trxId)}` });
-    await restUpsert('user_subscriptions', { user_id: userId, plan: 'lifetime', active: true, lifetime_free: true, expires_at: null, verified_by: req.headers['x-admin-id'] || 'admin', verified_at: new Date().toISOString() }, 'user_id');
-    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${userId}` });
-    const user = await restSingle('users', { id: `eq.${userId}` });
+    const paymentDoc = await awFind('user_payments', [Query.equal('trx_id', sanitize(trxId))]);
+    if (paymentDoc) await awUpdate('user_payments', paymentDoc.id, { verified: true, verified_by: req.headers['x-admin-id'] || 'admin', verified_at: new Date().toISOString() });
+    await awUpsert('user_subscriptions', userId, { user_id: userId, plan: 'lifetime', active: true, lifetime_free: true, expires_at: null, verified_by: req.headers['x-admin-id'] || 'admin', verified_at: new Date().toISOString() });
+    await awUpdate('users', userId, { last_active: new Date().toISOString() });
+    const user = await awGet('users', userId);
     if (user?.fcm_token) await sendFcm(user.fcm_token, { title: '✅ Payment Verified!', body: 'Your subscription is now active. Thank you!' }, { type: 'payment_verified' });
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'payment-verify'); }
 });
-app.get('/api/users/stats', requireSupabase, requireAdmin, async (req, res) => {
+app.get('/api/users/stats', requireAdmin, async (req, res) => {
   try {
     const [total, active, statusData, newToday, newWeek, newMonth, countsByVersion] = await Promise.all([
-      safeCount('users'),
-      safeFilterCount('users', 'status', 'active', 'last_active', getDaysAgo(1)),
-      (async () => { const a = await restCount('users', { status: 'eq.active' }); const i = await restCount('users', { status: 'eq.inactive' }); return { active: a, inactive: i }; })(),
-      safeFilterCount('users', 'status', 'active', 'created_at', getDayStart()),
-      safeFilterCount('users', 'status', 'active', 'created_at', getDaysAgo(7)),
-      safeFilterCount('users', 'status', 'active', 'created_at', getDaysAgo(30)),
-      (async () => { try { const d = await restSelect('users', 'app_version', { limit: '50000' }); const c = {}; for (const u of d || []) { const v = u.app_version || 'unknown'; c[v] = (c[v] || 0) + 1; } return c; } catch { return {}; } })(),
+      awCount('users'),
+      awCount('users', [Query.equal('status', 'active'), Query.greaterThan('last_active', new Date(getDaysAgo(1)).toISOString())]),
+      (async () => { const a = await awCount('users', [Query.equal('status', 'active')]); const i = await awCount('users', [Query.equal('status', 'inactive')]); return { active: a, inactive: i }; })(),
+      awCount('users', [Query.equal('status', 'active'), Query.greaterThan('created_at', new Date(getDayStart()).toISOString())]),
+      awCount('users', [Query.equal('status', 'active'), Query.greaterThan('created_at', new Date(getDaysAgo(7)).toISOString())]),
+      awCount('users', [Query.equal('status', 'active'), Query.greaterThan('created_at', new Date(getDaysAgo(30)).toISOString())]),
+      (async () => { try { const d = await awList('users', [Query.limit(50000)]); const c = {}; for (const u of d || []) { const v = u.app_version || 'unknown'; c[v] = (c[v] || 0) + 1; } return c; } catch { return {}; } })(),
     ]);
     res.json({ total, active, statusBreakpoint: statusData, newToday, thisWeek: newWeek, thisMonth: newMonth, byVersion: countsByVersion });
   } catch (e) { safeError(res, e, 'users-stats'); }
 });
-app.get('/api/ai/notification-agent-config', requireSupabase, requireAdmin, (req, res) => {
+app.get('/api/ai/notification-agent-config', requireAdmin, (req, res) => {
   fetch(`${apiHost}/api/ai-notification-agent`).then(r => r.json()).then(d => res.json(d)).catch(e => res.json({}));
 });
-app.post('/api/ai/notification-agent-config', requireSupabase, requireAdmin, (req, res) => proxy(req, res, `${apiHost}/api/ai-notification-agent`));
+app.post('/api/ai/notification-agent-config', requireAdmin, (req, res) => proxy(req, res, `${apiHost}/api/ai-notification-agent`));
 
 app.use(express.static(path.join(__dirname, 'dist')));
 app.get('*', (req, res) => {
