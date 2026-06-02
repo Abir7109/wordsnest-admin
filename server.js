@@ -255,14 +255,13 @@ async function restMaybeSingle(table, params = {}) {
 
 async function restInsert(table, body) {
   if (!SB_KEY) return null;
-  try {
-    const resp = await fetch(`${SB_URL}/rest/v1/${table}`, {
-      method: 'POST',
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
-      body: JSON.stringify(body),
-    });
-    return await resp.json();
-  } catch { return null; }
+  const resp = await fetch(`${SB_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`restInsert ${table} failed: ${resp.status} ${await resp.text().catch(() => '')}`);
+  return await resp.json();
 }
 
 async function restUpdate(table, body, params = {}) {
