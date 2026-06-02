@@ -224,20 +224,30 @@ const SB_URL = SUPABASE_URL;
 const SB_KEY = SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
 
 // Direct REST API helpers (bypasses supabase-js client overhead)
-async function restCount(table, filters = '') {
+function sbUrl(table, params) {
+  const url = new URL(`${SB_URL}/rest/v1/${table}`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return url.toString();
+}
+
+async function restCount(table, extraParams = {}) {
   if (!SB_KEY) return 0;
   try {
-    const resp = await fetch(`${SB_URL}/rest/v1/${table}?select=id&limit=0${filters}`, {
+    const url = sbUrl(table, { select: 'id', limit: '0', ...extraParams });
+    const resp = await fetch(url, {
       headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Prefer: 'count=exact' },
     });
-    return parseInt(resp.headers.get('content-range')?.split('/')[1] || '0', 10);
+    const range = resp.headers.get('content-range');
+    if (!range) return 0;
+    return parseInt(range.split('/')[1], 10) || 0;
   } catch { return 0; }
 }
 
-async function restSelect(table, selectCols = '*', suffix = '') {
+async function restSelect(table, selectCols = '*', extraParams = {}) {
   if (!SB_KEY) return [];
   try {
-    const resp = await fetch(`${SB_URL}/rest/v1/${table}?select=${selectCols}${suffix}`, {
+    const url = sbUrl(table, { select: selectCols, ...extraParams });
+    const resp = await fetch(url, {
       headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
     });
     return await resp.json();
@@ -249,7 +259,7 @@ async function safeCount(table) {
 }
 
 async function safeFilterCount(table, column, value, tsColumn, since) {
-  return restCount(table, `&${column}=eq.${value}&${tsColumn}=gte.${new Date(since).toISOString()}`);
+  return restCount(table, { [column]: `eq.${value}`, [tsColumn]: `gte.${new Date(since).toISOString()}` });
 }
 
 async function checkAndUpdateDailyUsage(userId) {
@@ -316,11 +326,11 @@ app.get('/api/dashboard', requireSupabase, async (req, res) => {
       restCount('users'),
       restCount('search_events'),
       restCount('installs'),
-      restCount('users', `&last_active=gte.${dayAgo}`),
-      restCount('users', `&created_at=gte.${todayStart}`),
-      restCount('search_events', `&timestamp=gte.${todayStart}`),
-      restCount('users', `&created_at=lte.${weekAgoIso}`),
-      restCount('users', `&last_active=gte.${yesterdayIso}&created_at=lte.${weekAgoIso}`),
+      restCount('users', { last_active: `gte.${dayAgo}` }),
+      restCount('users', { created_at: `gte.${todayStart}` }),
+      restCount('search_events', { timestamp: `gte.${todayStart}` }),
+      restCount('users', { created_at: `lte.${weekAgoIso}` }),
+      restCount('users', { last_active: `gte.${yesterdayIso}`, created_at: `lte.${weekAgoIso}` }),
       restCount('saved_words'),
       restCount('quiz_attempts'),
     ]);
@@ -351,9 +361,9 @@ app.get('/api/dashboard/timeline', requireSupabase, async (req, res) => {
     const days = 7;
 
     const [usersAll, searchesAll, activeUsers] = await Promise.all([
-      restSelect('users', 'created_at', `&created_at=gte.${sinceTs}`),
-      restSelect('search_events', 'timestamp', `&timestamp=gte.${sinceTs}`),
-      restSelect('users', 'last_active', `&last_active=gte.${sinceTs}`),
+      restSelect('users', 'created_at', { created_at: `gte.${sinceTs}` }),
+      restSelect('search_events', 'timestamp', { timestamp: `gte.${sinceTs}` }),
+      restSelect('users', 'last_active', { last_active: `gte.${sinceTs}` }),
     ]);
 
     const usersByDay = countByDay(usersAll.map(d => ({ timestamp: d.created_at })));
@@ -382,7 +392,7 @@ app.get('/api/dashboard/word-types', requireSupabase, async (req, res) => res.js
 
 app.get('/api/dashboard/recent-activity', requireSupabase, async (req, res) => {
   try {
-    const users = await restSelect('users', 'id,username,created_at', '&order=created_at.desc&limit=5');
+    const users = await restSelect('users', 'id,username,created_at', { order: 'created_at.desc', limit: '5' });
     const activities = (users || []).map(u => ({
       type: 'user_signup', userId: u.id,
       username: u.username || 'Unknown',
