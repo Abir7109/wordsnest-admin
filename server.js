@@ -328,21 +328,23 @@ async function authAdminDeleteUser(uid) {
 async function authAdminCreateUser(body) {
   if (!SB_KEY) return null;
   try {
+    const payload = {
+      email: body.email,
+      password: body.password,
+      data: { ...(body.user_metadata || {}), phone: body.phone || '' },
+    };
     const resp = await fetch(`${SB_URL}/auth/v1/signup`, {
       method: 'POST',
-      headers: { apikey: SB_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: body.email,
-        password: body.password,
-        data: body.user_metadata || {},
-        gotrue_meta_security: {},
-      }),
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
-    const data = await resp.json();
-    if (data.id || data.user?.id) {
+    const text = await resp.text();
+    const data = JSON.parse(text);
+    if (resp.ok && (data.id || data.user?.id)) {
       return { user: { id: data.id || data.user.id } };
     }
-    return { msg: data.msg || data.error || 'Signup failed' };
+    console.error('authAdminCreateUser response:', resp.status, text);
+    return { msg: (data.msg || data.error || data.error_description || `HTTP ${resp.status}`) };
   } catch (e) { console.error('authAdminCreateUser error:', e); return null; }
 }
 
