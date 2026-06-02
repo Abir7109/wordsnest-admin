@@ -969,11 +969,12 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
     const now = new Date().toISOString();
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await restUpdate('users', {
+    await restInsert('users', {
+      id: uid,
       phone: cleanPhone, username: cleanUsername, password_hash: hashedPassword,
       device_name: sanitize(deviceName || ''), status: 'active',
       created_at: now, last_active: now, app_version: req.body.appVersion || '2.0.0',
-    }, { id: `eq.${uid}` });
+    });
 
     await restUpsert('user_subscriptions',
       { user_id: uid, plan: 'free', active: false, lifetime_free: false },
