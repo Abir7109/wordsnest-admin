@@ -62,8 +62,8 @@ const adminLimiter = rateLimit({
 app.use('/api/admin/', adminLimiter);
 
 function safeError(res, e, context = '') {
-  console.error(`[ERROR] ${context}:`, e?.message || e, e?.code || '', e?.type || '');
-  res.status(500).json({ error: 'Internal server error', _debug: `${context}: ${e?.message || e}` });
+  console.error(`[ERROR] ${context}:`, e);
+  res.status(500).json({ error: 'Internal server error' });
 }
 const APPWRITE_ENDPOINT = process.env.APPWRITE_ENDPOINT || 'https://sgp.cloud.appwrite.io/v1';
 const APPWRITE_PROJECT_ID = process.env.APPWRITE_PROJECT_ID;
@@ -321,7 +321,11 @@ async function checkAndUpdateDailyUsage(userId) {
     return { allowed: false, remaining: 0, reason: 'limit_reached' };
   }
 
-  await awUpsert('daily_usage', `${userId}_${today}`, { user_id: userId, date: today, count: count + 1 });
+  if (usage) {
+    await awUpdate('daily_usage', usage.id, { count: count + 1 });
+  } else {
+    await awCreate('daily_usage', crypto.randomUUID(), { user_id: userId, date: today, count: 1 });
+  }
   await awUpdate('users', userId, { last_active: new Date().toISOString() });
 
   return { allowed: true, remaining: 9 - count, isPremium: false };
@@ -1047,7 +1051,12 @@ app.put('/api/admin/users/:phone/cooldown', requireAdmin, async (req, res) => {
 
     if (remove || cooldownMinutes === null || cooldownMinutes <= 0) {
       await awUpdate('users', user.id, { cooldown_until: null });
-      await awUpsert('daily_usage', `${user.id}_${getTodayStr()}`, { user_id: user.id, date: getTodayStr(), count: 0 });
+      const todayUsage = await awFind('daily_usage', [Query.equal('user_id', user.id), Query.equal('date', getTodayStr())]);
+      if (todayUsage) {
+        await awUpdate('daily_usage', todayUsage.id, { count: 0 });
+      } else {
+        await awCreate('daily_usage', crypto.randomUUID(), { user_id: user.id, date: getTodayStr(), count: 0 });
+      }
     } else {
       const minutes = durationMs ? Math.ceil(durationMs / 60000) : (cooldownMinutes || 60);
       const until = new Date(Date.now() + minutes * 60 * 1000).toISOString();
@@ -1288,14 +1297,21 @@ app.post('/api/user/words/save', requireJwt, async (req, res) => {
     const { word, type, definition, phonetic, synonyms, antonyms, simpleSentence, complexSentence, compoundSentence } = req.body;
     if (!word) return res.status(400).json({ error: 'Word required' });
 
-    await awUpsert('saved_words', `${userId}_${(word || '').toLowerCase()}`, {
-      user_id: userId, word: (word || '').toLowerCase(), type: type || 'Noun',
+    const lowerWord = (word || '').toLowerCase();
+    const existingWord = await awFind('saved_words', [Query.equal('user_id', userId), Query.equal('word', lowerWord)]);
+    const wordData = {
+      user_id: userId, word: lowerWord, type: type || 'Noun',
       definition: definition || '', phonetic: phonetic || '',
       synonyms: synonyms || '', antonyms: antonyms || '',
       simple_sentence: simpleSentence || '', complex_sentence: complexSentence || '',
       compound_sentence: compoundSentence || '',
       timestamp: new Date().toISOString(),
-    });
+    };
+    if (existingWord) {
+      await awUpdate('saved_words', existingWord.id, wordData);
+    } else {
+      await awCreate('saved_words', crypto.randomUUID(), wordData);
+    }
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'user-words-save'); }
 });
