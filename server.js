@@ -1167,6 +1167,54 @@ app.post('/api/ai-analyze', requireSupabase, requireJwt, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/ai/generate-quiz', requireSupabase, async (req, res) => {
+  try {
+    const { count = 5, difficulty = 'medium' } = req.body;
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    const GROQ_API_KEY = process.env.GROQ_API_KEY;
+    const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
+
+    let config = { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+    try {
+      const d = await restSingle('app_config', { id: `eq.1`, select: 'ai_provider,ai_model,ai_gemini_model,ai_enabled' });
+      if (d) config = { ...config, aiProvider: d.ai_provider, aiModel: d.ai_model, aiGeminiModel: d.ai_gemini_model, aiEnabled: d.ai_enabled };
+    } catch {}
+    if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
+
+    const prompt = `Generate ${count} ${difficulty} English vocabulary quiz questions. Return ONLY valid JSON (no markdown, no code block). Format: { "questions": [{ "word": "...", "question": "...", "options": ["a","b","c","d"], "correctIndex": 0, "hint": "...", "difficulty": "${difficulty}" }] }. Make questions test word meanings, synonyms, antonyms, or usage. Ensure correctIndex points to the right answer in options.`;
+
+    let aiResult = null;
+    if (config.aiProvider === 'gemini' && GEMINI_API_KEY) {
+      try {
+        const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${config.aiGeminiModel}:generateContent?key=${GEMINI_API_KEY}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        });
+        const data = await resp.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        aiResult = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+      } catch {}
+    }
+
+    if (!aiResult && (GROQ_API_KEY || GROQ_API_KEY_2)) {
+      const apiKey = (Math.random() > 0.5 && GROQ_API_KEY_2) ? GROQ_API_KEY_2 : GROQ_API_KEY;
+      try {
+        const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: config.aiModel, messages: [{ role: 'user', content: prompt }], temperature: 0.7 }),
+        });
+        const data = await resp.json();
+        const text = data?.choices?.[0]?.message?.content || '';
+        aiResult = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+      } catch {}
+    }
+
+    if (!aiResult || !Array.isArray(aiResult.questions)) return res.status(502).json({ error: 'AI generation failed' });
+
+    res.json({ success: true, questions: aiResult.questions });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/generate', requireSupabase, requireJwt, async (req, res) => {
   try {
     const { type, prompt: userPrompt } = req.body;
@@ -1267,6 +1315,14 @@ app.get('/api/quiz-pool', requireSupabase, async (req, res) => {
   try {
     const data = await restSelect('quiz_pool', '*', { order: 'created_at.desc', limit: '10' });
     res.json({ questions: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/quiz-pool/status', requireSupabase, async (req, res) => {
+  try {
+    const data = await restSelect('quiz_pool', 'word,created_at', { order: 'created_at.desc', limit: '40' });
+    const pool = data || [];
+    res.json({ hasQuiz: pool.length > 0, count: pool.length, generatedAt: pool[0]?.created_at || null, generatedWords: [...new Set(pool.map(q => q.word).filter(Boolean))] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
