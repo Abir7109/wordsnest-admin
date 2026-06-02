@@ -565,7 +565,7 @@ app.get('/api/words/stats', requireSupabase, async (req, res) => {
     const total = await safeCount('saved_words');
     const todayC = await restCount('saved_words', { timestamp: `gte.${todayStart}` });
     const weekC = await restCount('saved_words', { timestamp: `gte.${weekAgo}` });
-    let typeDist = {}, topWords = [];
+    let typeDist = {}, topWords = [], uniqueWords = 0;
     try {
       const data = await restSelect('saved_words', 'type', { limit: '2000' });
       for (const w of data || []) { if (w.type) typeDist[w.type] = (typeDist[w.type] || 0) + 1; }
@@ -574,9 +574,10 @@ app.get('/api/words/stats', requireSupabase, async (req, res) => {
       const data = await restSelect('saved_words', 'word,type', { limit: '2000' });
       const freq = {};
       for (const w of data || []) { const wl = w.word?.toLowerCase(); if (wl) { freq[wl] = (freq[wl] || 0) + 1; } }
+      uniqueWords = Object.keys(freq).length;
       topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
     } catch {}
-    res.json({ total, today: todayC, thisWeek: weekC, typeDistribution: typeDist, topWords });
+    res.json({ total, today: todayC, thisWeek: weekC, uniqueWords, typeDistribution: Object.entries(typeDist).map(([type, count]) => ({ type, count })), topWords });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
