@@ -120,7 +120,10 @@ async function sendFcmMulticast(tokens, notification, data) {
   return { successCount: success, failureCount: failure };
 }
 
-function requireSupabase(req, res, next) { next(); }
+function requireSupabase(req, res, next) {
+  if (!SB_KEY) return res.status(503).json({ error: 'Supabase not configured' });
+  next();
+}
 
 // ── JWT Helpers ──────────────────────────────────────────────────────
 function requireJwt(req, res, next) {
@@ -266,41 +269,38 @@ async function restInsert(table, body) {
 
 async function restUpdate(table, body, params = {}) {
   if (!SB_KEY) return;
-  try {
-    const url = sbUrl(table, params);
-    await fetch(url, {
-      method: 'PATCH',
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  } catch {}
+  const url = sbUrl(table, params);
+  const resp = await fetch(url, {
+    method: 'PATCH',
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`restUpdate ${table} failed: ${resp.status} ${await resp.text().catch(() => '')}`);
 }
 
 async function restDelete(table, params = {}) {
   if (!SB_KEY) return;
-  try {
-    const url = sbUrl(table, params);
-    await fetch(url, {
-      method: 'DELETE',
-      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
-    });
-  } catch {}
+  const url = sbUrl(table, params);
+  const resp = await fetch(url, {
+    method: 'DELETE',
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+  });
+  if (!resp.ok) throw new Error(`restDelete ${table} failed: ${resp.status} ${await resp.text().catch(() => '')}`);
 }
 
 async function restUpsert(table, body, conflictColumn = 'id') {
   if (!SB_KEY) return null;
-  try {
-    const url = sbUrl(table, { on_conflict: conflictColumn });
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json',
-        Prefer: 'resolution=merge-duplicates,return=representation',
-      },
-      body: JSON.stringify(body),
-    });
-    return await resp.json();
-  } catch { return null; }
+  const url = sbUrl(table, { on_conflict: conflictColumn });
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=representation',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`restUpsert ${table} failed: ${resp.status} ${await resp.text().catch(() => '')}`);
+  return await resp.json();
 }
 
 async function authAdminDeleteUser(uid) {
@@ -337,10 +337,10 @@ async function authGetUser(token) {
 
 async function checkAndUpdateDailyUsage(userId) {
   const today = getTodayStr();
-  const user = await restSingle('users', { id: `eq.${userId}`, select: '*,user_subscriptions(*)' });
+  const user = await restSingle('users', { id: `eq.${userId}` });
   if (!user) return { allowed: false, remaining: 0, reason: 'User not found' };
 
-  const sub = user.user_subscriptions;
+  const sub = await restMaybeSingle('user_subscriptions', { user_id: `eq.${userId}` });
   if (sub && (sub.active || sub.lifetime_free)) return { allowed: true, remaining: -1, isPremium: true };
 
   if (user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now()) {
@@ -409,12 +409,30 @@ app.get('/api/dashboard', requireSupabase, async (req, res) => {
     const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
     const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
 
+    const [wordsTodayCount, quizzesTodayCount, savedTypesData, savedWordsData, searchWordsData, quizScoresData] = await Promise.all([
+      restCount('saved_words', { timestamp: `gte.${todayStart}` }).catch(() => 0),
+      restCount('quiz_attempts', { timestamp: `gte.${todayStart}` }).catch(() => 0),
+      restSelect('saved_words', 'type', { limit: '2000' }),
+      restSelect('saved_words', 'word', { limit: '2000' }),
+      restSelect('search_events', 'word', { timestamp: `gte.${weekAgoIso}`, limit: '50000' }),
+      restSelect('quiz_attempts', 'score', { limit: '1000' }),
+    ]);
+
+    const typeDist = {};
+    for (const w of savedTypesData || []) { if (w.type) typeDist[w.type] = (typeDist[w.type] || 0) + 1; }
+    const wordFreq = {};
+    for (const w of savedWordsData || []) { const wl = w.word?.toLowerCase(); if (wl) wordFreq[wl] = (wordFreq[wl] || 0) + 1; }
+    const scores = (quizScoresData || []).map(q => q.score).filter(s => s !== null && s !== undefined);
+    const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+
     const payload = {
       users, activeUsers, searches, words, quizzes,
       newUsersToday, dailyActiveUsers: activeUsers,
       totalInstalls: installs, searchesToday,
-      wordsToday: 0, quizzesToday: 0,
-      averageQuizScore: 0, uniqueWordsSaved: 0, topWordType: 'N/A',
+      wordsToday: wordsTodayCount, quizzesToday: quizzesTodayCount,
+      averageQuizScore: avgScore,
+      uniqueWordsSaved: Object.keys(wordFreq).length,
+      topWordType: Object.entries(typeDist).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A',
       engagementRate, retentionRate,
     };
 
@@ -455,9 +473,34 @@ app.get('/api/dashboard/timeline', requireSupabase, async (req, res) => {
   } catch { res.json({ timeline: [] }); }
 });
 
-app.get('/api/dashboard/top-words', requireSupabase, async (req, res) => res.json({ topWords: [] }));
-app.get('/api/dashboard/top-searches', requireSupabase, async (req, res) => res.json({ topSearches: [] }));
-app.get('/api/dashboard/word-types', requireSupabase, async (req, res) => res.json({ distribution: [] }));
+app.get('/api/dashboard/top-words', requireSupabase, async (req, res) => {
+  try {
+    const data = await restSelect('saved_words', 'word,count', { limit: '2000' });
+    const freq = {};
+    for (const w of data || []) { const wl = w.word?.toLowerCase(); if (wl) freq[wl] = (freq[wl] || 0) + 1; }
+    const topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 10);
+    res.json({ topWords });
+  } catch { res.json({ topWords: [] }); }
+});
+app.get('/api/dashboard/top-searches', requireSupabase, async (req, res) => {
+  try {
+    const weekAgo = new Date(getDaysAgo(7)).toISOString();
+    const data = await restSelect('search_events', 'word', { timestamp: `gte.${weekAgo}`, limit: '50000' });
+    const freq = {};
+    for (const s of data || []) { const w = s.word?.toLowerCase(); if (w) freq[w] = (freq[w] || 0) + 1; }
+    const topSearches = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 10);
+    res.json({ topSearches });
+  } catch { res.json({ topSearches: [] }); }
+});
+app.get('/api/dashboard/word-types', requireSupabase, async (req, res) => {
+  try {
+    const data = await restSelect('saved_words', 'type', { limit: '2000' });
+    const dist = {};
+    for (const w of data || []) { if (w.type) dist[w.type] = (dist[w.type] || 0) + 1; }
+    const distribution = Object.entries(dist).map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count);
+    res.json({ distribution });
+  } catch { res.json({ distribution: [] }); }
+});
 
 app.get('/api/dashboard/recent-activity', requireSupabase, async (req, res) => {
   try {
@@ -474,25 +517,44 @@ app.get('/api/dashboard/recent-activity', requireSupabase, async (req, res) => {
 // ── Users ────────────────────────────────────────────────────────────
 app.get('/api/users', requireSupabase, async (req, res) => {
   try {
-    const users = await restSelect('users', '*', { order: 'last_active.desc', limit: '100' });
-    res.json({ users: (users || []).map(u => ({ uid: u.id, ...u, lastActive: new Date(u.last_active).getTime() })) });
+    const [users, subs, wordCounts, quizCounts] = await Promise.all([
+      restSelect('users', '*', { order: 'last_active.desc', limit: '100' }),
+      restSelect('user_subscriptions', '*', { limit: '5000' }),
+      restSelect('saved_words', 'user_id', { limit: '50000' }),
+      restSelect('quiz_attempts', 'user_id', { limit: '50000' }),
+    ]);
+    const subMap = {};
+    for (const s of subs || []) subMap[s.user_id] = { plan: s.plan, active: s.active, lifetimeFree: s.lifetime_free, expiresAt: s.expires_at, dailyUsage: s.daily_usage };
+    const wc = {}; for (const w of wordCounts || []) wc[w.user_id] = (wc[w.user_id] || 0) + 1;
+    const qc = {}; for (const q of quizCounts || []) qc[q.user_id] = (qc[q.user_id] || 0) + 1;
+    const enriched = (users || []).map(u => ({
+      uid: u.id, ...u, subscription: subMap[u.id] || { plan: 'free', active: false, lifetimeFree: false },
+      lastActive: new Date(u.last_active).getTime(), wordCount: wc[u.id] || 0, quizCount: qc[u.id] || 0,
+      banned: u.status === 'banned', coolDownUntil: u.cooldown_until ? new Date(u.cooldown_until).getTime() : null,
+      deviceName: u.device_name, created_at: u.created_at,
+    }));
+    res.json({ users: enriched });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/users/:uid', requireSupabase, async (req, res) => {
   try {
     const { uid } = req.params;
-    const user = await restSingle('users', { id: `eq.${uid}` });
+    let user = await restSingle('users', { id: `eq.${uid}` });
+    if (!user) user = await restMaybeSingle('users', { phone: `eq.${sanitize(uid)}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    const uid2 = user.id;
     const [wordsData, quizzesData, searchData] = await Promise.all([
-      restSelect('saved_words', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '100' }),
-      restSelect('quiz_attempts', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '50' }),
-      restSelect('search_history', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '50' }),
+      restSelect('saved_words', '*', { user_id: `eq.${uid2}`, order: 'timestamp.desc', limit: '100' }),
+      restSelect('quiz_attempts', '*', { user_id: `eq.${uid2}`, order: 'timestamp.desc', limit: '50' }),
+      restSelect('search_history', '*', { user_id: `eq.${uid2}`, order: 'timestamp.desc', limit: '50' }),
     ]);
 
+    const sub = await restMaybeSingle('user_subscriptions', { user_id: `eq.${uid2}` }) || {};
+
     res.json({
-      profile: { uid, ...user, lastActive: new Date(user.last_active).getTime(), createdAt: new Date(user.created_at).getTime() },
+      profile: { uid, ...user, subscription: { plan: sub.plan, active: sub.active, lifetimeFree: sub.lifetime_free, expiresAt: sub.expires_at ? new Date(sub.expires_at).getTime() : null, dailyUsage: sub.daily_usage }, banned: user.status === 'banned', coolDownUntil: user.cooldown_until ? new Date(user.cooldown_until).getTime() : null, deviceName: user.device_name, lastActive: new Date(user.last_active).getTime(), createdAt: new Date(user.created_at).getTime() },
       words: (wordsData || []).map(w => ({ id: w.id, ...w })),
       quizzes: (quizzesData || []).map(q => ({ id: q.id, ...q })),
       searchHistory: (searchData || []).map(s => ({ id: s.id, ...s })),
@@ -550,6 +612,13 @@ app.get('/api/words', requireSupabase, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.delete('/api/words/:id', requireSupabase, async (req, res) => {
+  try {
+    await restDelete('saved_words', { id: `eq.${req.params.id}` });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/words/delete/:id', requireSupabase, async (req, res) => {
   try {
     await restDelete('saved_words', { id: `eq.${req.params.id}` });
@@ -588,6 +657,13 @@ app.get('/api/searches', requireSupabase, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.delete('/api/searches/:id', requireSupabase, async (req, res) => {
+  try {
+    await restDelete('search_events', { id: `eq.${req.params.id}` });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/searches/delete/:id', requireSupabase, async (req, res) => {
   try {
     await restDelete('search_events', { id: `eq.${req.params.id}` });
@@ -609,7 +685,7 @@ app.get('/api/searches/stats', requireSupabase, async (req, res) => {
       for (const s of data || []) { const w = s.word?.toLowerCase(); if (w) freq[w] = (freq[w] || 0) + 1; }
       topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
     } catch {}
-    res.json({ total, today: todayC, thisWeek: weekC, topWords });
+    res.json({ total, today: todayC, thisWeek: weekC, uniqueWords: topWords.length, topWords });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -618,6 +694,13 @@ app.get('/api/quizzes', requireSupabase, async (req, res) => {
   try {
     const data = await restSelect('quiz_attempts', '*,users!inner(username,email)', { order: 'timestamp.desc', limit: '200' });
     res.json({ quizzes: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/quizzes/:id', requireSupabase, async (req, res) => {
+  try {
+    await restDelete('quiz_attempts', { id: `eq.${req.params.id}` });
+    res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -641,7 +724,12 @@ app.get('/api/quizzes/stats', requireSupabase, async (req, res) => {
       scores = (data || []).map(q => q.score).filter(s => s !== null && s !== undefined);
     } catch {}
     const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
-    res.json({ total, today: todayC, thisWeek: weekC, averageScore: avg });
+    const highest = scores.length > 0 ? Math.max(...scores) : 0;
+    const lowest = scores.length > 0 ? Math.min(...scores) : 0;
+    const participants = await restCount('quiz_attempts', { select: 'user_id' });
+    const scoreDist = {};
+    for (const s of scores) { const r = s >= 80 ? '80-100' : s >= 60 ? '60-79' : s >= 40 ? '40-59' : '0-39'; scoreDist[r] = (scoreDist[r] || 0) + 1; }
+    res.json({ total, today: todayC, thisWeek: weekC, averageScore: avg, highestScore: highest, lowestScore: lowest, totalParticipants: participants, scoreDistribution: Object.entries(scoreDist).map(([range, count]) => ({ range, count })) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -701,7 +789,32 @@ app.post('/api/leaderboard/update', requireSupabase, async (req, res) => {
 app.get('/api/app-config', requireSupabase, async (req, res) => {
   try {
     const data = await restSingle('app_config', { id: `eq.1` });
-    res.json(data || {});
+    if (!data) return res.json({});
+    res.json({
+      isAppAlive: data.is_app_alive ?? true,
+      underMaintenance: data.under_maintenance ?? false,
+      maintenanceTitle: data.maintenance_title || '',
+      maintenanceMessage: data.maintenance_message || '',
+      maintenanceEstimatedTime: data.maintenance_estimated_time || '',
+      forceUpdate: data.force_update ?? false,
+      softUpdate: data.soft_update ?? false,
+      currentVersion: data.current_version || '',
+      minRequiredVersion: data.min_required_version || '',
+      updateUrl: data.update_url || '',
+      updateMessage: data.update_message || '',
+      dailyQuizLimit: data.daily_quiz_limit ?? 3,
+      dailyWordLimit: data.daily_word_limit ?? 10,
+      enableNotifications: data.enable_notifications ?? true,
+      enableLeaderboard: data.enable_leaderboard ?? true,
+      enableBackup: data.enable_backup ?? false,
+      adsEnabled: data.ads_enabled ?? false,
+      apiEndpoint: data.api_endpoint || '',
+      featureFlags: data.feature_flags || {},
+      aiProvider: data.ai_provider || 'groq',
+      aiModel: data.ai_model || 'llama-3.3-70b-versatile',
+      aiGeminiModel: data.ai_gemini_model || 'gemini-2.0-flash',
+      aiEnabled: data.ai_enabled ?? true,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -826,7 +939,7 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
       }, { id: `eq.${existing.id}` });
 
       const token = createToken(cleanPhone, existing.id);
-      return res.json({ success: true, phone: cleanPhone, username: cleanUsername, token });
+      return res.json({ success: true, phone: cleanPhone, username: cleanUsername, token, uid: existing.id });
     }
 
     const authResult = await authAdminCreateUser({
@@ -853,7 +966,7 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
 
     const token = createToken(cleanPhone, uid);
     console.log(`[REGISTER] Created user ${uid} (${cleanPhone})`);
-    res.json({ success: true, phone: cleanPhone, username: cleanUsername, token });
+    res.json({ success: true, phone: cleanPhone, username: cleanUsername, token, uid });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -872,7 +985,7 @@ app.post('/api/auth/phone-signin', requireSupabase, async (req, res) => {
 
     await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${user.id}` });
     const token = createToken(cleanPhone, user.id);
-    res.json({ success: true, token, username: user.username });
+    res.json({ success: true, token, username: user.username, uid: user.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -946,7 +1059,7 @@ app.post('/api/subscribe', requireSupabase, requireJwt, async (req, res) => {
 app.get('/api/subscription/status', requireSupabase, requireJwt, async (req, res) => {
   try {
     const userId = req.userId;
-    const user = await restSingle('users', { id: `eq.${userId}`, select: '*,user_subscriptions(*)' });
+    const user = await restSingle('users', { id: `eq.${userId}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const sub = user.user_subscriptions || {};
@@ -1007,15 +1120,16 @@ app.put('/api/admin/users/:phone/ban', requireSupabase, async (req, res) => {
 app.put('/api/admin/users/:phone/cooldown', requireSupabase, async (req, res) => {
   try {
     const { phone } = req.params;
-    const { cooldownMinutes } = req.body;
+    const { cooldownMinutes, remove, durationMs } = req.body;
     const user = await restSingle('users', { phone: `eq.${sanitize(phone)}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    if (cooldownMinutes === null || cooldownMinutes <= 0) {
+    if (remove || cooldownMinutes === null || cooldownMinutes <= 0) {
       await restUpdate('users', { cooldown_until: null }, { id: `eq.${user.id}` });
       await restUpsert('daily_usage', { user_id: user.id, date: getTodayStr(), count: 0 }, 'user_id,date');
     } else {
-      const until = new Date(Date.now() + cooldownMinutes * 60 * 1000).toISOString();
+      const minutes = durationMs ? Math.ceil(durationMs / 60000) : (cooldownMinutes || 60);
+      const until = new Date(Date.now() + minutes * 60 * 1000).toISOString();
       await restUpdate('users', { cooldown_until: until }, { id: `eq.${user.id}` });
     }
     res.json({ success: true });
@@ -1276,9 +1390,10 @@ app.get('/api/user/words', requireSupabase, requireJwt, async (req, res) => {
 
 app.get('/api/user/daily-usage', requireSupabase, requireJwt, async (req, res) => {
   try {
-    const user = await restSingle('users', { id: `eq.${req.userId}`, select: '*,user_subscriptions(*)' });
+    const user = await restSingle('users', { id: `eq.${req.userId}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
-    const sub = user.user_subscriptions || {};
+
+    const sub = await restMaybeSingle('user_subscriptions', { user_id: `eq.${req.userId}` }) || {};
     const premium = sub.active || sub.lifetime_free;
     const usage = await restMaybeSingle('daily_usage', { user_id: `eq.${req.userId}`, date: `eq.${getTodayStr()}` });
     const dailyCount = usage?.count || 0;
@@ -1448,6 +1563,59 @@ app.get('/api/installs/stats', requireSupabase, async (req, res) => {
 });
 
 // ── Static Files ─────────────────────────────────────────────────────
+// Frontend path aliases (admin panel uses different paths than server routes)
+const apiHost = `http://localhost:${PORT}`;
+function proxy(req, res, targetUrl, method = 'POST') {
+  fetch(targetUrl, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body) })
+    .then(r => r.json().then(d => res.json(d)).catch(() => res.status(r.status).json({})))
+    .catch(e => res.status(500).json({ error: e.message }));
+}
+app.get('/api/admin/notifications', requireSupabase, (req, res) => {
+  fetch(`${apiHost}/api/notifications`).then(r => r.json()).then(d => res.json(d)).catch(e => res.json({ notifications: [] }));
+});
+app.post('/api/admin/send-notification', requireSupabase, (req, res) => proxy(req, res, `${apiHost}/api/notifications/send`));
+app.get('/api/admin/leaderboard', requireSupabase, (req, res) => {
+  fetch(`${apiHost}/api/leaderboard/admin`).then(r => r.json()).then(d => res.json(d)).catch(e => res.json({ leaderboard: [] }));
+});
+app.put('/api/reports/:id/status', requireSupabase, async (req, res) => {
+  try { await restUpdate('reports', { status: 'read' }, { id: `eq.${req.params.id}` }); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/reports/:id', requireSupabase, async (req, res) => {
+  try { await restDelete('reports', { id: `eq.${req.params.id}` }); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/admin/payments/:trxId/verify', requireSupabase, async (req, res) => {
+  try {
+    const trxId = req.params.trxId;
+    const payment = await restSingle('user_payments', { trx_id: `eq.${sanitize(trxId)}`, select: '*,users!inner(id,fcm_token)' });
+    if (!payment) return res.status(404).json({ error: 'Payment not found' });
+    const userId = payment.user_id;
+    await restUpdate('user_payments', { verified: true, verified_by: req.headers['x-admin-id'] || 'admin', verified_at: new Date().toISOString() }, { trx_id: `eq.${sanitize(trxId)}` });
+    await restUpsert('user_subscriptions', { user_id: userId, plan: 'lifetime', active: true, lifetime_free: true, expires_at: null, verified_by: req.headers['x-admin-id'] || 'admin', verified_at: new Date().toISOString() }, 'user_id');
+    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${userId}` });
+    const user = await restSingle('users', { id: `eq.${userId}` });
+    if (user?.fcm_token) await sendFcm(user.fcm_token, { title: '✅ Payment Verified!', body: 'Your subscription is now active. Thank you!' }, { type: 'payment_verified' });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/users/stats', requireSupabase, async (req, res) => {
+  try {
+    const [total, active, statusData, newToday, newWeek, newMonth, countsByVersion] = await Promise.all([
+      safeCount('users'),
+      safeFilterCount('users', 'status', 'active', 'last_active', getDaysAgo(1)),
+      (async () => { const a = await restCount('users', { status: 'eq.active' }); const i = await restCount('users', { status: 'eq.inactive' }); return { active: a, inactive: i }; })(),
+      safeFilterCount('users', 'status', 'active', 'created_at', getDayStart()),
+      safeFilterCount('users', 'status', 'active', 'created_at', getDaysAgo(7)),
+      safeFilterCount('users', 'status', 'active', 'created_at', getDaysAgo(30)),
+      (async () => { try { const d = await restSelect('users', 'app_version', { limit: '50000' }); const c = {}; for (const u of d || []) { const v = u.app_version || 'unknown'; c[v] = (c[v] || 0) + 1; } return c; } catch { return {}; } })(),
+    ]);
+    res.json({ total, active, statusBreakpoint: statusData, newToday, thisWeek: newWeek, thisMonth: newMonth, byVersion: countsByVersion });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/ai/notification-agent-config', requireSupabase, (req, res) => {
+  fetch(`${apiHost}/api/ai-notification-agent`).then(r => r.json()).then(d => res.json(d)).catch(e => res.json({}));
+});
+app.post('/api/ai/notification-agent-config', requireSupabase, (req, res) => proxy(req, res, `${apiHost}/api/ai-notification-agent`));
+
 app.use(express.static(path.join(__dirname, 'dist')));
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });

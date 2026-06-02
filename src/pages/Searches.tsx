@@ -25,7 +25,9 @@ export default function Searches() {
   function deleteSearch(id) {
     if (!window.confirm('Delete this search event?')) return;
     fetch(`${window.location.origin}/api/searches/${id}`, { method: 'DELETE' })
-      .then(() => setSearches(prev => prev.filter(s => s.id !== id)));
+      .then(r => r.json())
+      .then(() => setSearches(prev => prev.filter(s => s.id !== id)))
+      .catch(() => {});
   }
 
   useEffect(() => {

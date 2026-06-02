@@ -231,6 +231,7 @@ export default function Dashboard() {
   const [activity, setActivity] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     const load = () => {
@@ -261,7 +262,7 @@ export default function Dashboard() {
     load();
     const interval = setInterval(load, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [retryCount]);
 
   if (loading) {
     return (
@@ -274,7 +275,7 @@ export default function Dashboard() {
       <div className="p-8">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-[#2A170F]">Dashboard</h1>
-          <button onClick={() => { setLoading(true); setError(null); }} className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-[#897365] hover:text-[#2A170F] transition-colors">
+          <button onClick={() => { setLoading(true); setError(null); setRetryCount(c => c + 1); }} className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-[#897365] hover:text-[#2A170F] transition-colors">
             <RefreshCw className="w-3.5 h-3.5" /> Retry
           </button>
         </div>
