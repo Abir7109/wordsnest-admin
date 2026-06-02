@@ -984,7 +984,7 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
     const token = createToken(cleanPhone, uid);
     console.log(`[REGISTER] Created user ${uid} (${cleanPhone})`);
     res.json({ success: true, phone: cleanPhone, username: cleanUsername, token, uid });
-  } catch (e) { safeError(res, e, 'auth-register'); }
+  } catch (e) { console.error('[REGISTER] Error:', e?.message || e); res.status(500).json({ error: e?.message || 'Registration failed' }); }
 });
 
 // Legacy phone sign-in
