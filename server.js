@@ -177,6 +177,49 @@ function createToken(phone, uid, role = 'user') {
 
 // ── DB Helpers ───────────────────────────────────────────────────────
 
+function getTodayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function getDayStart(ts = Date.now()) {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function getDaysAgo(n) {
+  return getDayStart() - n * 86400000;
+}
+
+function formatDateLabel(ts) {
+  const d = new Date(ts);
+  return `${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]} ${d.getDate()}`;
+}
+
+function sanitize(str) {
+  if (!str) return '';
+  return String(str).replace(/<[^>]*>/g, '').trim().substring(0, 500);
+}
+
+function isPremium(user) {
+  if (!user) return false;
+  if (user.lifetime_free) return true;
+  if (user.subscription?.active && user.subscription?.expiresAt > Date.now()) return true;
+  return false;
+}
+
+function countByDay(docs, field = 'timestamp') {
+  const dayMap = {};
+  for (const d of docs) {
+    const ts = d[field] ? new Date(d[field]).getTime() : 0;
+    if (!ts) continue;
+    const day = getDayStart(ts);
+    dayMap[day] = (dayMap[day] || 0) + 1;
+  }
+  return dayMap;
+}
+
 // ── Appwrite DB Helpers ──────────────────────────────────────────────
 
 // Helper to convert Appwrite doc to plain object (strip $ prefixes)
@@ -254,6 +297,34 @@ async function awUpsert(coll, id, data) {
 
 async function awGetUser(id) {
   return awGet('users', id);
+}
+
+async function checkAndUpdateDailyUsage(userId) {
+  const today = getTodayStr();
+  const user = await awGet('users', userId);
+  if (!user) return { allowed: false, remaining: 0, reason: 'User not found' };
+
+  const sub = await awFind('user_subscriptions', [Query.equal('user_id', userId)]);
+  if (sub && (sub.active || sub.lifetime_free)) return { allowed: true, remaining: -1, isPremium: true };
+
+  if (user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now()) {
+    return { allowed: false, remaining: 0, reason: 'cool_down' };
+  }
+
+  const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
+  const count = usage?.count || 0;
+
+  if (count >= 10) {
+    const cooldownUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await awUpdate('users', userId, { cooldown_until: cooldownUntil });
+    await awUpdate('users', userId, { rate_limit_hits: (user.rate_limit_hits || 0) + 1 });
+    return { allowed: false, remaining: 0, reason: 'limit_reached' };
+  }
+
+  await awUpsert('daily_usage', `${userId}_${today}`, { user_id: userId, date: today, count: count + 1 });
+  await awUpdate('users', userId, { last_active: new Date().toISOString() });
+
+  return { allowed: true, remaining: 9 - count, isPremium: false };
 }
 
 // ── Health ───────────────────────────────────────────────────────────
