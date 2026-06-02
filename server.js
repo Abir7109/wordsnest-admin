@@ -220,21 +220,36 @@ function isPremium(user) {
   return false;
 }
 
-async function safeCount(table, column = '*') {
+const SB_URL = SUPABASE_URL;
+const SB_KEY = SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+
+// Direct REST API helpers (bypasses supabase-js client overhead)
+async function restCount(table, filters = '') {
+  if (!SB_KEY) return 0;
   try {
-    const { count } = await supabase.from(table).select(column, { count: 'exact', head: true });
-    return count || 0;
+    const resp = await fetch(`${SB_URL}/rest/v1/${table}?select=id&limit=0${filters}`, {
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Prefer: 'count=exact' },
+    });
+    return parseInt(resp.headers.get('content-range')?.split('/')[1] || '0', 10);
   } catch { return 0; }
 }
 
-async function safeFilterCount(table, column, value, tsColumn, since) {
+async function restSelect(table, selectCols = '*', suffix = '') {
+  if (!SB_KEY) return [];
   try {
-    const { count } = await supabase
-      .from(table).select('*', { count: 'exact', head: true })
-      .eq(column, value)
-      .gte(tsColumn, new Date(since).toISOString());
-    return count || 0;
-  } catch { return 0; }
+    const resp = await fetch(`${SB_URL}/rest/v1/${table}?select=${selectCols}${suffix}`, {
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+    });
+    return await resp.json();
+  } catch { return []; }
+}
+
+async function safeCount(table) {
+  return restCount(table);
+}
+
+async function safeFilterCount(table, column, value, tsColumn, since) {
+  return restCount(table, `&${column}=eq.${value}&${tsColumn}=gte.${new Date(since).toISOString()}`);
 }
 
 async function checkAndUpdateDailyUsage(userId) {
@@ -284,61 +299,49 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', supabase: supabase
 app.get('/api/ping-keep-alive', (req, res) => res.json({ pong: Date.now() }));
 
 // ── Dashboard ────────────────────────────────────────────────────────
-const cache = { data: null, ts: 0, TTL: 120000 };
-async function getCached(ttl, fetcher) {
-  if (cache.data && Date.now() - cache.ts < ttl) return cache.data;
-  cache.data = await fetcher();
-  cache.ts = Date.now();
-  return cache.data;
-}
+const dashCache = { data: null, ts: 0, TTL: 120000 };
 
 app.get('/api/dashboard', requireSupabase, async (req, res) => {
   try {
+    if (dashCache.data && Date.now() - dashCache.ts < dashCache.TTL) {
+      return res.json(dashCache.data);
+    }
+
     const dayAgo = new Date(Date.now() - 86400000).toISOString();
     const todayStart = new Date(getDayStart()).toISOString();
+    const weekAgoIso = new Date(getDaysAgo(7)).toISOString();
+    const yesterdayIso = new Date(getDaysAgo(1)).toISOString();
 
-    const stats = await getCached(120000, async () => {
-      const { count: users } = await safeCount('users');
-      const { count: searches } = await safeCount('search_events');
-      const { count: installs } = await safeCount('installs');
+    const results = await Promise.all([
+      restCount('users'),
+      restCount('search_events'),
+      restCount('installs'),
+      restCount('users', `&last_active=gte.${dayAgo}`),
+      restCount('users', `&created_at=gte.${todayStart}`),
+      restCount('search_events', `&timestamp=gte.${todayStart}`),
+      restCount('users', `&created_at=lte.${weekAgoIso}`),
+      restCount('users', `&last_active=gte.${yesterdayIso}&created_at=lte.${weekAgoIso}`),
+      restCount('saved_words'),
+      restCount('quiz_attempts'),
+    ]);
 
-      let activeUsers = 0, newUsersToday = 0, searchesToday = 0;
-      try {
-        const { count: au } = await supabase.from('users').select('*', { count: 'exact', head: true }).gte('last_active', dayAgo);
-        activeUsers = au || 0;
-      } catch { activeUsers = 0; }
-      try {
-        const { count: nu } = await supabase.from('users').select('*', { count: 'exact', head: true }).gte('created_at', todayStart);
-        newUsersToday = nu || 0;
-      } catch { newUsersToday = 0; }
-      try {
-        const { count: st } = await supabase.from('search_events').select('*', { count: 'exact', head: true }).gte('timestamp', todayStart);
-        searchesToday = st || 0;
-      } catch { searchesToday = 0; }
+    const [users, searches, installs, activeUsers, newUsersToday, searchesToday, usersBeforeWeek, retained, words, quizzes] = results;
 
-      const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
-      const weekAgo = new Date(getDaysAgo(7)).toISOString();
-      let usersBeforeWeek = 0, retained = 0;
-      try {
-        const { count: ubw } = await supabase.from('users').select('*', { count: 'exact', head: true }).lte('created_at', weekAgo);
-        usersBeforeWeek = ubw || 0;
-      } catch { usersBeforeWeek = 0; }
-      try {
-        const { count: rt } = await supabase.from('users').select('*', { count: 'exact', head: true }).gte('last_active', new Date(getDaysAgo(1)).toISOString()).lte('created_at', weekAgo);
-        retained = rt || 0;
-      } catch { retained = 0; }
-      const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
+    const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
+    const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
 
-      return { users, activeUsers, searches, newUsersToday, searchesToday, installs, engagementRate, retentionRate };
-    });
+    const payload = {
+      users, activeUsers, searches, words, quizzes,
+      newUsersToday, dailyActiveUsers: activeUsers,
+      totalInstalls: installs, searchesToday,
+      wordsToday: 0, quizzesToday: 0,
+      averageQuizScore: 0, uniqueWordsSaved: 0, topWordType: 'N/A',
+      engagementRate, retentionRate,
+    };
 
-    const words = await safeCount('saved_words');
-    const quizzes = await safeCount('quiz_attempts');
-
-    res.json({
-      ...stats, words, quizzes, dailyActiveUsers: stats.activeUsers,
-      wordsToday: 0, quizzesToday: 0, averageQuizScore: 0, uniqueWordsSaved: 0, topWordType: 'N/A',
-    });
+    dashCache.data = payload;
+    dashCache.ts = Date.now();
+    res.json(payload);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -346,37 +349,27 @@ app.get('/api/dashboard/timeline', requireSupabase, async (req, res) => {
   try {
     const sinceTs = new Date(getDaysAgo(6)).toISOString();
     const days = 7;
-    const timeline = [];
 
-    let usersAll = [], searchesAll = [], activeUsers = [];
-    try {
-      const { data } = await supabase.from('users').select('created_at').gte('created_at', sinceTs);
-      usersAll = data || [];
-    } catch { usersAll = []; }
-    try {
-      const { data } = await supabase.from('search_events').select('timestamp').gte('timestamp', sinceTs);
-      searchesAll = data || [];
-    } catch { searchesAll = []; }
-    try {
-      const { data } = await supabase.from('users').select('last_active').gte('last_active', sinceTs);
-      activeUsers = data || [];
-    } catch { activeUsers = []; }
+    const [usersAll, searchesAll, activeUsers] = await Promise.all([
+      restSelect('users', 'created_at', `&created_at=gte.${sinceTs}`),
+      restSelect('search_events', 'timestamp', `&timestamp=gte.${sinceTs}`),
+      restSelect('users', 'last_active', `&last_active=gte.${sinceTs}`),
+    ]);
 
     const usersByDay = countByDay(usersAll.map(d => ({ timestamp: d.created_at })));
     const searchesByDay = countByDay(searchesAll.map(d => ({ timestamp: d.timestamp })));
     const activeByDay = countByDay(activeUsers.map(d => ({ timestamp: d.last_active })));
 
+    const timeline = [];
     for (let i = days - 1; i >= 0; i--) {
       const dayTs = getDaysAgo(i);
-      const label = formatDateLabel(dayTs);
-      const date = new Date(dayTs).toISOString().split('T')[0];
       timeline.push({
-        date, label,
+        date: new Date(dayTs).toISOString().split('T')[0],
+        label: formatDateLabel(dayTs),
         users: activeByDay[dayTs] || 0,
         activeUsers: activeByDay[dayTs] || 0,
         searches: searchesByDay[dayTs] || 0,
-        words: 0, quizzes: 0,
-        newUsers: usersByDay[dayTs] || 0,
+        words: 0, quizzes: 0, newUsers: usersByDay[dayTs] || 0,
       });
     }
     res.json({ timeline });
@@ -389,12 +382,12 @@ app.get('/api/dashboard/word-types', requireSupabase, async (req, res) => res.js
 
 app.get('/api/dashboard/recent-activity', requireSupabase, async (req, res) => {
   try {
-    const activities = [];
-    const { data: users } = await supabase.from('users')
-      .select('id, username, created_at').order('created_at', { ascending: false }).limit(5);
-    for (const u of users || []) {
-      activities.push({ type: 'user_signup', userId: u.id, username: u.username || 'Unknown', timestamp: new Date(u.created_at).getTime() });
-    }
+    const users = await restSelect('users', 'id,username,created_at', '&order=created_at.desc&limit=5');
+    const activities = (users || []).map(u => ({
+      type: 'user_signup', userId: u.id,
+      username: u.username || 'Unknown',
+      timestamp: new Date(u.created_at).getTime(),
+    }));
     res.json({ activities });
   } catch { res.json({ activities: [] }); }
 });
