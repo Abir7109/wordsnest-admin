@@ -247,64 +247,57 @@ async function safeGet(query) {
   try { return await query; } catch { return { docs: [] }; }
 }
 
+// Simple in-memory cache to avoid exhausting Firestore free quota
+const cache = { data: null, ts: 0, TTL: 120000 };
+async function getCached(ttl, fetcher) {
+  if (cache.data && Date.now() - cache.ts < ttl) return cache.data;
+  cache.data = await fetcher();
+  cache.ts = Date.now();
+  return cache.data;
+}
+
 app.get('/api/dashboard', requireFirebase, async (req, res) => {
   try {
     const dayAgo = Date.now() - 86400000;
     const todayStart = getDayStart();
 
-    // Use simple get() queries that work without composite indexes
-    const [usersSnap, searchSnap, installsSnap] = await Promise.all([
-      safeGet(db.collection('users').get()),
-      safeGet(db.collection('search_events').limit(1000).get()),
-      safeGet(db.collection('installs').limit(1000).get()),
+    // Cache users snapshot (2 min TTL) to avoid repeated reads on auto-refresh
+    const stats = await getCached(120000, async () => {
+      const [usersSnap, searchSnap, installsSnap] = await Promise.all([
+        safeGet(db.collection('users').get()),
+        safeGet(db.collection('search_events').limit(1000).get()),
+        safeGet(db.collection('installs').limit(1000).get()),
+      ]);
+
+      const allUsers = usersSnap.docs || [];
+      const users = allUsers.length;
+      const activeUsers = allUsers.filter(d => (d.data().lastActive || 0) >= dayAgo).length;
+      const newUsersToday = allUsers.filter(d => (d.data().createdAt || 0) >= todayStart).length;
+      const searches = searchSnap.docs.length;
+      const searchesToday = (searchSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
+      const totalInstalls = installsSnap.docs.length;
+
+      const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
+      const weekAgo = getDaysAgo(7);
+      const usersBeforeWeek = allUsers.filter(d => (d.data().createdAt || 0) <= weekAgo).length;
+      const retained = allUsers.filter(d => (d.data().lastActive || 0) >= getDaysAgo(1) && (d.data().createdAt || 0) <= weekAgo).length;
+      const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
+
+      return { users, activeUsers, searches, newUsersToday, searchesToday, totalInstalls, engagementRate, retentionRate };
+    });
+
+    // Word/quiz counts using Firestore aggregate count() — 1 read each, regardless of data size
+    const [words, quizzes] = await Promise.all([
+      safeCount(db.collectionGroup('words').count().get()),
+      safeCount(db.collectionGroup('quizzes').count().get()),
     ]);
-
-    const allUsers = usersSnap.docs || [];
-    const users = allUsers.length;
-    const activeUsers = allUsers.filter(d => (d.data().lastActive || 0) >= dayAgo).length;
-    const newUsersToday = allUsers.filter(d => (d.data().createdAt || 0) >= todayStart).length;
-    const searches = searchSnap.docs.length;
-    const searchesToday = (searchSnap.docs || []).filter(d => (d.data().timestamp || 0) >= todayStart).length;
-    const totalInstalls = installsSnap.docs.length;
-
-    // Word/quiz stats via collectionGroup queries (efficient, needs indexes for prod)
-    const [wordsSnap, quizzesSnap] = await Promise.all([
-      safeGet(db.collectionGroup('words').limit(5000).get()),
-      safeGet(db.collectionGroup('quizzes').limit(5000).get()),
-    ]);
-
-    const words = wordsSnap.docs.length;
-    const quizzes = quizzesSnap.docs.length;
-    const wordsToday = wordsSnap.docs.filter(d => (d.data().timestamp || 0) >= todayStart).length;
-    const quizzesToday = quizzesSnap.docs.filter(d => (d.data().timestamp || 0) >= todayStart).length;
-
-    const allScores = quizzesSnap.docs.map(d => d.data().score).filter(s => s !== undefined && s !== null);
-    const averageQuizScore = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : 0;
-
-    const uniqueWords = new Set(wordsSnap.docs.filter(d => d.data().word).map(d => d.data().word.toLowerCase()));
-    const uniqueWordsSaved = uniqueWords.size;
-
-    const typeCounts = {};
-    for (const d of wordsSnap.docs) {
-      const t = d.data().type;
-      if (t) typeCounts[t] = (typeCounts[t] || 0) + 1;
-    }
-    const topWordType = Object.keys(typeCounts).length > 0
-      ? Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0]
-      : 'N/A';
-
-    const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
-    const weekAgo = getDaysAgo(7);
-    const usersBeforeWeek = allUsers.filter(d => (d.data().createdAt || 0) <= weekAgo).length;
-    const retained = allUsers.filter(d => (d.data().lastActive || 0) >= getDaysAgo(1) && (d.data().createdAt || 0) <= weekAgo).length;
-    const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
 
     res.json({
-      users, activeUsers, searches, words, quizzes,
-      newUsersToday, dailyActiveUsers: activeUsers,
-      totalInstalls, searchesToday, wordsToday, quizzesToday,
-      averageQuizScore, uniqueWordsSaved, topWordType,
-      engagementRate, retentionRate,
+      ...stats,
+      words, quizzes,
+      dailyActiveUsers: stats.activeUsers,
+      wordsToday: 0, quizzesToday: 0,
+      averageQuizScore: 0, uniqueWordsSaved: 0, topWordType: 'N/A',
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -316,24 +309,18 @@ app.get('/api/dashboard/timeline', requireFirebase, async (req, res) => {
   try {
     const days = 7;
     const timeline = [];
-
     const sinceTs = getDaysAgo(days - 1);
 
-    const [usersAll, searchesAll, wordsAll, quizzesAll] = await Promise.all([
+    const [usersAll, searchesAll] = await Promise.all([
       safeGet(db.collection('users').where('createdAt', '>=', sinceTs).get()),
       safeGet(db.collection('search_events').where('timestamp', '>=', sinceTs).get()),
-      safeGet(db.collectionGroup('words').where('timestamp', '>=', sinceTs).get()),
-      safeGet(db.collectionGroup('quizzes').where('timestamp', '>=', sinceTs).get()),
     ]);
 
     const usersByDay = countByDay(usersAll.docs.map(d => ({ timestamp: d.data().createdAt })));
     const searchesByDay = countByDay(searchesAll.docs.map(d => ({ timestamp: d.data().timestamp })));
-    const wordsByDay = countByDay(wordsAll.docs.map(d => ({ timestamp: d.data().timestamp })));
-    const quizzesByDay = countByDay(quizzesAll.docs.map(d => ({ timestamp: d.data().timestamp })));
 
-    let activeUsersByDay = {};
     const activeSnap = await safeGet(db.collection('users').where('lastActive', '>=', sinceTs).get());
-    activeUsersByDay = countByDay(activeSnap.docs.map(d => ({ timestamp: d.data().lastActive })));
+    const activeUsersByDay = countByDay(activeSnap.docs.map(d => ({ timestamp: d.data().lastActive })));
 
     for (let i = days - 1; i >= 0; i--) {
       const dayTs = getDaysAgo(i);
@@ -349,8 +336,8 @@ app.get('/api/dashboard/timeline', requireFirebase, async (req, res) => {
         users: activeUsersByDay[dayTs] || 0,
         activeUsers: activeUsersByDay[dayTs] || 0,
         searches: searchesByDay[dayTs] || 0,
-        words: wordsByDay[dayTs] || 0,
-        quizzes: quizzesByDay[dayTs] || 0,
+        words: 0,
+        quizzes: 0,
         newUsers,
       });
     }
@@ -363,56 +350,18 @@ app.get('/api/dashboard/timeline', requireFirebase, async (req, res) => {
 
 // ── Dashboard Top Words ──────────────────────────────────────────────
 app.get('/api/dashboard/top-words', requireFirebase, async (req, res) => {
-  try {
-    const snap = await safeGet(db.collectionGroup('words').limit(2000).get());
-    const wordCounts = {};
-    const wordData = {};
-    for (const d of snap.docs) {
-      const data = d.data();
-      const w = data.word?.toLowerCase();
-      if (!w) continue;
-      wordCounts[w] = (wordCounts[w] || 0) + 1;
-      if (!wordData[w]) wordData[w] = { type: data.type };
-    }
-    const top = Object.entries(wordCounts)
-      .map(([word, count]) => ({ word, count, type: wordData[word]?.type }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 20);
-    res.json({ topWords: top });
-  } catch {
-    res.json({ topWords: [] });
-  }
+  res.json({ topWords: [] });
 });
 
 // ── Dashboard Top Searches ───────────────────────────────────────────
 app.get('/api/dashboard/top-searches', requireFirebase, async (req, res) => {
-  try {
-    const snap = await safeGet(db.collection('search_events').limit(2000).get());
-    const wordCounts = {};
-    const userSets = {};
-    for (const d of snap.docs) {
-      const data = d.data();
-      const w = data.word?.toLowerCase();
-      if (!w) continue;
-      wordCounts[w] = (wordCounts[w] || 0) + 1;
-      if (!userSets[w]) userSets[w] = new Set();
-      if (data.user_id) userSets[w].add(data.user_id);
-    }
-    const top = Object.entries(wordCounts)
-      .map(([word, count]) => ({ word, count, users: userSets[word]?.size || 0 }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 20);
-    res.json({ topSearches: top });
-  } catch {
-    res.json({ topSearches: [] });
-  }
+  res.json({ topSearches: [] });
 });
 
 // ── Recent Activity ──────────────────────────────────────────────────
 app.get('/api/dashboard/recent-activity', requireFirebase, async (req, res) => {
   try {
     const activities = [];
-
     const recentUsersSnap = await safeGet(db.collection('users').orderBy('createdAt', 'desc').limit(5).get());
     for (const d of recentUsersSnap.docs) {
       const data = d.data();
@@ -423,33 +372,8 @@ app.get('/api/dashboard/recent-activity', requireFirebase, async (req, res) => {
         timestamp: data.createdAt || 0,
       });
     }
-
-    const recentWordsSnap = await safeGet(db.collectionGroup('words').orderBy('timestamp', 'desc').limit(5).get());
-    for (const d of recentWordsSnap.docs) {
-      const data = d.data();
-      activities.push({
-        type: 'word_saved',
-        userId: d.ref.parent.parent?.id || '',
-        username: '',
-        word: data.word,
-        timestamp: data.timestamp || 0,
-      });
-    }
-
-    const recentQuizzesSnap = await safeGet(db.collectionGroup('quizzes').orderBy('timestamp', 'desc').limit(5).get());
-    for (const d of recentQuizzesSnap.docs) {
-      const data = d.data();
-      activities.push({
-        type: 'quiz_taken',
-        userId: d.ref.parent.parent?.id || '',
-        username: '',
-        score: data.score,
-        timestamp: data.timestamp || 0,
-      });
-    }
-
     activities.sort((a, b) => b.timestamp - a.timestamp);
-    res.json({ activities: activities.slice(0, 15) });
+    res.json({ activities });
   } catch {
     res.json({ activities: [] });
   }
@@ -457,23 +381,7 @@ app.get('/api/dashboard/recent-activity', requireFirebase, async (req, res) => {
 
 // ── Dashboard Word Type Distribution ─────────────────────────────────
 app.get('/api/dashboard/word-types', requireFirebase, async (req, res) => {
-  try {
-    const snap = await safeGet(db.collectionGroup('words').limit(2000).get());
-    const typeCounts = {};
-    let total = 0;
-    for (const d of snap.docs) {
-      const type = d.data().type;
-      if (!type) continue;
-      typeCounts[type] = (typeCounts[type] || 0) + 1;
-      total++;
-    }
-    const distribution = Object.entries(typeCounts)
-      .map(([type, count]) => ({ type, count, percentage: total > 0 ? Math.round((count / total) * 100 * 10) / 10 : 0 }))
-      .sort((a, b) => b.count - a.count);
-    res.json({ distribution });
-  } catch {
-    res.json({ distribution: [] });
-  }
+  res.json({ distribution: [] });
 });
 
 // ── Users ────────────────────────────────────────────────────────────
@@ -488,42 +396,12 @@ app.get('/api/users', requireFirebase, async (req, res) => {
       snap = await db.collection('users').limit(100).get();
     }
 
-    // Per-user stats via collectionGroup queries (efficient, needs indexes for prod)
-    const [wordsSnap, quizzesSnap] = await Promise.all([
-      safeGet(db.collectionGroup('words').get()),
-      safeGet(db.collectionGroup('quizzes').get()),
-    ]);
-
-    const wordCounts = {};
-    const quizCounts = {};
-    const allScores = {};
-
-    for (const d of wordsSnap.docs) {
-      const uid = d.ref.parent.parent?.id;
-      if (uid) wordCounts[uid] = (wordCounts[uid] || 0) + 1;
-    }
-    for (const d of quizzesSnap.docs) {
-      const uid = d.ref.parent.parent?.id;
-      if (uid) {
-        quizCounts[uid] = (quizCounts[uid] || 0) + 1;
-        const s = d.data().score;
-        if (s !== undefined && s !== null) {
-          if (!allScores[uid]) allScores[uid] = [];
-          allScores[uid].push(s);
-        }
-      }
-    }
-
     const users = snap.docs.map(d => {
-      const uid = d.id;
-      const scores = allScores[uid] || [];
+      const data = d.data();
       return {
-        uid,
-        ...d.data(),
-        lastActive: d.data().lastActive || 0,
-        wordCount: wordCounts[uid] || 0,
-        quizCount: quizCounts[uid] || 0,
-        averageScore: scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0,
+        uid: d.id,
+        ...data,
+        lastActive: data.lastActive || 0,
       };
     });
     res.json({ users });

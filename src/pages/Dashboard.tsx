@@ -259,7 +259,7 @@ export default function Dashboard() {
         });
     };
     load();
-    const interval = setInterval(load, 7000);
+    const interval = setInterval(load, 60000);
     return () => clearInterval(interval);
   }, []);
 
