@@ -753,10 +753,10 @@ app.get('/api/leaderboard', requireSupabase, async (req, res) => {
       const s = searchCounts[u.id] || 0;
       const score = Math.min(s, 5) * 2 + (quizScores[u.id] || 0) + (u.leaderboard_streak || 0) * 3 + (u.leaderboard_manual_score || 0);
       return {
-        userId: u.id, name: u.username, emoji: u.emoji || '🌱',
+        uid: u.id, userId: u.id, name: u.username, emoji: u.emoji || '🌱',
         score, words: wordCounts[u.id] || 0, quiz: quizScores[u.id] || 0,
-        streak: u.leaderboard_streak || 0,
-        searches: s, isAdmin: false,
+        streak: u.leaderboard_streak || 0, computedScore: score,
+        searches: s, isAdmin: false, email: '',
       };
     }).sort((a, b) => b.score - a.score).slice(0, 100);
 
