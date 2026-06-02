@@ -1294,7 +1294,7 @@ app.get('/api/user/daily-usage', requireSupabase, requireJwt, async (req, res) =
 });
 
 // ── Quiz Pool ────────────────────────────────────────────────────────
-app.post('/api/admin/quiz-pool/publish', requireSupabase, async (req, res) => {
+app.post('/api/quiz-pool/publish', requireSupabase, async (req, res) => {
   try {
     const { questions } = req.body;
     if (!Array.isArray(questions) || questions.length === 0) return res.status(400).json({ error: 'Questions array required' });
