@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
@@ -964,14 +965,7 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
       return res.json({ success: true, phone: cleanPhone, username: cleanUsername, token, uid: existing.id });
     }
 
-    const authResult = await authAdminCreateUser({
-      phone: cleanPhone, email: `${cleanPhone.replace('+', '')}@wordsnest.app`,
-      password, email_confirm: true, phone_confirm: true,
-      user_metadata: { username: cleanUsername },
-    });
-    if (!authResult?.user?.id) return res.status(500).json({ error: authResult?.msg || 'Failed to create user' });
-
-    const uid = authResult.user.id;
+    const uid = crypto.randomUUID();
     const now = new Date().toISOString();
     const hashedPassword = await bcrypt.hash(password, 10);
 
