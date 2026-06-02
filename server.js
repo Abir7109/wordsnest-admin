@@ -7,7 +7,6 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { createClient } from '@supabase/supabase-js';
 
 dotenv.config();
 
@@ -52,25 +51,11 @@ const searchLimiter = rateLimit({
 });
 app.use('/api/ai-analyze', searchLimiter);
 
-// ── Supabase Init ────────────────────────────────────────────────────
+// ── Supabase Config ──────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://cpjeqobzdmxmjmmbunim.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-let supabase = null;
-let supabaseReady = false;
-
-async function initSupabase() {
-  try {
-    const key = SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
-    if (!key) { console.warn('Supabase key not found'); return; }
-    supabase = createClient(SUPABASE_URL, key, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-    supabaseReady = true;
-    console.log('Supabase initialized');
-  } catch (e) {
-    console.warn('Supabase init failed:', e.message);
-  }
-}
+const SB_URL = SUPABASE_URL;
+const SB_KEY = SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
 
 // FCM via direct HTTP (no Firebase Admin SDK)
 let fcmAccessToken = null;
@@ -135,12 +120,7 @@ async function sendFcmMulticast(tokens, notification, data) {
   return { successCount: success, failureCount: failure };
 }
 
-setTimeout(() => initSupabase(), 100);
-
-function requireSupabase(req, res, next) {
-  if (!supabaseReady) return res.status(503).json({ error: 'Supabase not initialized' });
-  next();
-}
+function requireSupabase(req, res, next) { next(); }
 
 // ── JWT Helpers ──────────────────────────────────────────────────────
 function requireJwt(req, res, next) {
@@ -151,13 +131,7 @@ function requireJwt(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.userPhone = decoded.phone;
     req.userId = decoded.uid;
-    // Async check user exists
-    if (supabase) {
-      supabase.from('users').select('id').eq('id', decoded.uid).single().then(({ data }) => {
-        if (!data) return res.status(401).json({ error: 'User no longer exists', code: 'user_deleted' });
-        next();
-      }).catch(() => next());
-    } else { next(); }
+    next();
   } catch { return res.status(401).json({ error: 'Invalid or expired token' }); }
 }
 
@@ -178,14 +152,9 @@ function createToken(phone, uid, role = 'user') {
 }
 
 // ── DB Helpers ───────────────────────────────────────────────────────
-function sb() { return supabase; }
 
 async function getUserDoc(id) {
-  if (!supabase) return null;
-  try {
-    const { data } = await supabase.from('users').select('*').eq('id', id).single();
-    return data || null;
-  } catch { return null; }
+  return restSingle('users', { id: `eq.${id}` });
 }
 
 function getTodayStr() {
@@ -219,9 +188,6 @@ function isPremium(user) {
   if (user.subscription?.active && user.subscription?.expiresAt > Date.now()) return true;
   return false;
 }
-
-const SB_URL = SUPABASE_URL;
-const SB_KEY = SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
 
 // Direct REST API helpers (bypasses supabase-js client overhead)
 function sbUrl(table, params) {
@@ -262,9 +228,117 @@ async function safeFilterCount(table, column, value, tsColumn, since) {
   return restCount(table, { [column]: `eq.${value}`, [tsColumn]: `gte.${new Date(since).toISOString()}` });
 }
 
+// ── REST Write Helpers ────────────────────────────────────────────────
+async function restSingle(table, params = {}) {
+  if (!SB_KEY) return null;
+  try {
+    const url = sbUrl(table, { ...params, limit: '1' });
+    const resp = await fetch(url, {
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Accept: 'application/vnd.pgrst.object+json' },
+    });
+    if (resp.status === 406) return null;
+    return await resp.json();
+  } catch { return null; }
+}
+
+async function restMaybeSingle(table, params = {}) {
+  if (!SB_KEY) return null;
+  try {
+    const url = sbUrl(table, { ...params, limit: '1' });
+    const resp = await fetch(url, {
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+    });
+    const data = await resp.json();
+    return data?.length > 0 ? data[0] : null;
+  } catch { return null; }
+}
+
+async function restInsert(table, body) {
+  if (!SB_KEY) return null;
+  try {
+    const resp = await fetch(`${SB_URL}/rest/v1/${table}`, {
+      method: 'POST',
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+      body: JSON.stringify(body),
+    });
+    return await resp.json();
+  } catch { return null; }
+}
+
+async function restUpdate(table, body, params = {}) {
+  if (!SB_KEY) return;
+  try {
+    const url = sbUrl(table, params);
+    await fetch(url, {
+      method: 'PATCH',
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {}
+}
+
+async function restDelete(table, params = {}) {
+  if (!SB_KEY) return;
+  try {
+    const url = sbUrl(table, params);
+    await fetch(url, {
+      method: 'DELETE',
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+    });
+  } catch {}
+}
+
+async function restUpsert(table, body, conflictColumn = 'id') {
+  if (!SB_KEY) return null;
+  try {
+    const url = sbUrl(table, { on_conflict: conflictColumn });
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=representation',
+      },
+      body: JSON.stringify(body),
+    });
+    return await resp.json();
+  } catch { return null; }
+}
+
+async function authAdminDeleteUser(uid) {
+  if (!SB_KEY) return false;
+  try {
+    const resp = await fetch(`${SB_URL}/auth/v1/admin/users/${uid}`, {
+      method: 'DELETE',
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+    });
+    return resp.ok;
+  } catch { return false; }
+}
+
+async function authAdminCreateUser(body) {
+  if (!SB_KEY) return null;
+  try {
+    const resp = await fetch(`${SB_URL}/auth/v1/admin/users`, {
+      method: 'POST',
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await resp.json();
+  } catch { return null; }
+}
+
+async function authGetUser(token) {
+  try {
+    const resp = await fetch(`${SB_URL}/auth/v1/user`, {
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${token}` },
+    });
+    return await resp.json();
+  } catch { return null; }
+}
+
 async function checkAndUpdateDailyUsage(userId) {
   const today = getTodayStr();
-  const { data: user } = await supabase.from('users').select('*, user_subscriptions(*)').eq('id', userId).single();
+  const user = await restSingle('users', { id: `eq.${userId}`, select: '*,user_subscriptions(*)' });
   if (!user) return { allowed: false, remaining: 0, reason: 'User not found' };
 
   const sub = user.user_subscriptions;
@@ -274,21 +348,17 @@ async function checkAndUpdateDailyUsage(userId) {
     return { allowed: false, remaining: 0, reason: 'cool_down' };
   }
 
-  const { data: usage } = await supabase.from('daily_usage')
-    .select('count').eq('user_id', userId).eq('date', today).single();
+  const usage = await restMaybeSingle('daily_usage', { user_id: `eq.${userId}`, date: `eq.${today}` });
   const count = usage?.count || 0;
 
   if (count >= 10) {
     const cooldownUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await supabase.from('users').update({ cooldown_until: cooldownUntil }).eq('id', userId);
+    await restUpdate('users', { cooldown_until: cooldownUntil }, { id: `eq.${userId}` });
     return { allowed: false, remaining: 0, reason: 'limit_reached' };
   }
 
-  await supabase.from('daily_usage').upsert(
-    { user_id: userId, date: today, count: count + 1 },
-    { onConflict: 'user_id,date' }
-  );
-  await supabase.from('users').update({ last_active: new Date().toISOString() }).eq('id', userId);
+  await restUpsert('daily_usage', { user_id: userId, date: today, count: count + 1 }, 'user_id,date');
+  await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${userId}` });
 
   return { allowed: true, remaining: 9 - count, isPremium: false };
 }
@@ -305,7 +375,7 @@ function countByDay(docs, field = 'timestamp') {
 }
 
 // ── Health ───────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => res.json({ status: 'ok', supabase: supabaseReady }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', supabase: !!SB_KEY }));
 app.get('/api/ping-keep-alive', (req, res) => res.json({ pong: Date.now() }));
 
 // ── Dashboard ────────────────────────────────────────────────────────
@@ -405,29 +475,28 @@ app.get('/api/dashboard/recent-activity', requireSupabase, async (req, res) => {
 // ── Users ────────────────────────────────────────────────────────────
 app.get('/api/users', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('users').select('*').order('last_active', { ascending: false }).limit(100);
-    const users = (data || []).map(u => ({ uid: u.id, ...u, lastActive: new Date(u.last_active).getTime() }));
-    res.json({ users });
+    const users = await restSelect('users', '*', { order: 'last_active.desc', limit: '100' });
+    res.json({ users: (users || []).map(u => ({ uid: u.id, ...u, lastActive: new Date(u.last_active).getTime() })) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/users/:uid', requireSupabase, async (req, res) => {
   try {
     const { uid } = req.params;
-    const { data: user } = await supabase.from('users').select('*').eq('id', uid).single();
+    const user = await restSingle('users', { id: `eq.${uid}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const [wordsData, quizzesData, searchData] = await Promise.all([
-      supabase.from('saved_words').select('*').eq('user_id', uid).order('timestamp', { ascending: false }).limit(100),
-      supabase.from('quiz_attempts').select('*').eq('user_id', uid).order('timestamp', { ascending: false }).limit(50),
-      supabase.from('search_history').select('*').eq('user_id', uid).order('timestamp', { ascending: false }).limit(50),
+      restSelect('saved_words', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '100' }),
+      restSelect('quiz_attempts', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '50' }),
+      restSelect('search_history', '*', { user_id: `eq.${uid}`, order: 'timestamp.desc', limit: '50' }),
     ]);
 
     res.json({
       profile: { uid, ...user, lastActive: new Date(user.last_active).getTime(), createdAt: new Date(user.created_at).getTime() },
-      words: (wordsData.data || []).map(w => ({ id: w.id, ...w })),
-      quizzes: (quizzesData.data || []).map(q => ({ id: q.id, ...q })),
-      searchHistory: (searchData.data || []).map(s => ({ id: s.id, ...s })),
+      words: (wordsData || []).map(w => ({ id: w.id, ...w })),
+      quizzes: (quizzesData || []).map(q => ({ id: q.id, ...q })),
+      searchHistory: (searchData || []).map(s => ({ id: s.id, ...s })),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -435,68 +504,56 @@ app.get('/api/users/:uid', requireSupabase, async (req, res) => {
 app.delete('/api/users/:identifier', requireSupabase, async (req, res) => {
   try {
     const { identifier } = req.params;
-    const { data: user } = await supabase.from('users').select('id, fcm_token').eq('id', identifier).maybeSingle();
+    const user = await restMaybeSingle('users', { id: `eq.${identifier}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Send force_logout FCM
     if (user.fcm_token) {
       await sendFcm(user.fcm_token, { title: 'Account Deleted', body: 'Your account has been permanently deleted.' }, { type: 'force_logout' });
     }
 
-    // Delete from auth then cascade deletes everything
-    const { error: authErr } = await supabase.auth.admin.deleteUser(identifier);
-    if (authErr) console.warn('Auth delete warning:', authErr.message);
-
+    await authAdminDeleteUser(identifier);
     res.json({ success: true, message: 'User permanently deleted.' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/users/stats/aggregate', requireSupabase, async (req, res) => {
   try {
-    const todayStart = new Date(getDayStart()).toISOString();
-    const weekAgo = new Date(getDaysAgo(7)).toISOString();
-    const monthAgo = new Date(getDaysAgo(30)).toISOString();
-
-    const [total, active, withStatus, newToday, newWeek, newMonth, countsByVersion] = await Promise.all([
+    const [total, active, statusData, newToday, newWeek, newMonth, countsByVersion] = await Promise.all([
       safeCount('users'),
       safeFilterCount('users', 'status', 'active', 'last_active', getDaysAgo(1)),
       (async () => {
-        const { count: activeC } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('status', 'active');
-        const { count: inactiveC } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('status', 'inactive');
-        return { active: activeC || 0, inactive: inactiveC || 0 };
+        const activeC = await restCount('users', { status: 'eq.active' });
+        const inactiveC = await restCount('users', { status: 'eq.inactive' });
+        return { active: activeC, inactive: inactiveC };
       })(),
       safeFilterCount('users', 'status', 'active', 'created_at', getDayStart()),
       safeFilterCount('users', 'status', 'active', 'created_at', getDaysAgo(7)),
       safeFilterCount('users', 'status', 'active', 'created_at', getDaysAgo(30)),
       (async () => {
         try {
-          const { data } = await supabase.from('users').select('app_version');
+          const data = await restSelect('users', 'app_version', { limit: '50000' });
           const counts = {};
-          for (const u of data || []) {
-            const v = u.app_version || 'unknown';
-            counts[v] = (counts[v] || 0) + 1;
-          }
+          for (const u of data || []) { const v = u.app_version || 'unknown'; counts[v] = (counts[v] || 0) + 1; }
           return counts;
         } catch { return {}; }
       })(),
     ]);
 
-    res.json({ total, active, statusBreakdown: withStatus, newUsersToday: newToday, newUsersThisWeek: newWeek, newUsersThisMonth: newMonth, byAppVersion: countsByVersion });
+    res.json({ total, active, statusBreakdown: statusData, newUsersToday: newToday, newUsersThisWeek: newWeek, newUsersThisMonth: newMonth, byAppVersion: countsByVersion });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Saved Words ──────────────────────────────────────────────────────
 app.get('/api/words', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('saved_words').select('*').order('timestamp', { ascending: false }).limit(200);
+    const data = await restSelect('saved_words', '*', { order: 'timestamp.desc', limit: '200' });
     res.json({ words: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/words/delete/:id', requireSupabase, async (req, res) => {
   try {
-    const { error } = await supabase.from('saved_words').delete().eq('id', req.params.id);
-    if (error) return res.status(500).json({ error: error.message });
+    await restDelete('saved_words', { id: `eq.${req.params.id}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -506,21 +563,15 @@ app.get('/api/words/stats', requireSupabase, async (req, res) => {
     const todayStart = new Date(getDayStart()).toISOString();
     const weekAgo = new Date(getDaysAgo(7)).toISOString();
     const total = await safeCount('saved_words');
-    let todayC = 0, weekC = 0, typeDist = {}, topWords = [];
+    const todayC = await restCount('saved_words', { timestamp: `gte.${todayStart}` });
+    const weekC = await restCount('saved_words', { timestamp: `gte.${weekAgo}` });
+    let typeDist = {}, topWords = [];
     try {
-      const { count } = await supabase.from('saved_words').select('*', { count: 'exact', head: true }).gte('timestamp', todayStart);
-      todayC = count || 0;
-    } catch {}
-    try {
-      const { count } = await supabase.from('saved_words').select('*', { count: 'exact', head: true }).gte('timestamp', weekAgo);
-      weekC = count || 0;
-    } catch {}
-    try {
-      const { data } = await supabase.from('saved_words').select('type').limit(2000);
+      const data = await restSelect('saved_words', 'type', { limit: '2000' });
       for (const w of data || []) { if (w.type) typeDist[w.type] = (typeDist[w.type] || 0) + 1; }
     } catch {}
     try {
-      const { data } = await supabase.from('saved_words').select('word, type').limit(2000);
+      const data = await restSelect('saved_words', 'word,type', { limit: '2000' });
       const freq = {};
       for (const w of data || []) { const wl = w.word?.toLowerCase(); if (wl) { freq[wl] = (freq[wl] || 0) + 1; } }
       topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
@@ -532,14 +583,14 @@ app.get('/api/words/stats', requireSupabase, async (req, res) => {
 // ── Searches ─────────────────────────────────────────────────────────
 app.get('/api/searches', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('search_events').select('*').order('timestamp', { ascending: false }).limit(200);
+    const data = await restSelect('search_events', '*', { order: 'timestamp.desc', limit: '200' });
     res.json({ searches: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/searches/delete/:id', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('search_events').delete().eq('id', req.params.id);
+    await restDelete('search_events', { id: `eq.${req.params.id}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -549,11 +600,11 @@ app.get('/api/searches/stats', requireSupabase, async (req, res) => {
     const total = await safeCount('search_events');
     const todayStart = new Date(getDayStart()).toISOString();
     const weekAgo = new Date(getDaysAgo(7)).toISOString();
-    let todayC = 0, weekC = 0, topWords = [];
-    try { const { count } = await supabase.from('search_events').select('*', { count: 'exact', head: true }).gte('timestamp', todayStart); todayC = count || 0; } catch {}
-    try { const { count } = await supabase.from('search_events').select('*', { count: 'exact', head: true }).gte('timestamp', weekAgo); weekC = count || 0; } catch {}
+    const todayC = await restCount('search_events', { timestamp: `gte.${todayStart}` });
+    const weekC = await restCount('search_events', { timestamp: `gte.${weekAgo}` });
+    let topWords = [];
     try {
-      const { data } = await supabase.from('search_events').select('word').gte('timestamp', weekAgo);
+      const data = await restSelect('search_events', 'word', { timestamp: `gte.${weekAgo}`, limit: '50000' });
       const freq = {};
       for (const s of data || []) { const w = s.word?.toLowerCase(); if (w) freq[w] = (freq[w] || 0) + 1; }
       topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
@@ -565,14 +616,14 @@ app.get('/api/searches/stats', requireSupabase, async (req, res) => {
 // ── Quizzes ──────────────────────────────────────────────────────────
 app.get('/api/quizzes', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('quiz_attempts').select('*, users!inner(username, email)').order('timestamp', { ascending: false }).limit(200);
+    const data = await restSelect('quiz_attempts', '*,users!inner(username,email)', { order: 'timestamp.desc', limit: '200' });
     res.json({ quizzes: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/quizzes/delete/:id', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('quiz_attempts').delete().eq('id', req.params.id);
+    await restDelete('quiz_attempts', { id: `eq.${req.params.id}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -582,11 +633,11 @@ app.get('/api/quizzes/stats', requireSupabase, async (req, res) => {
     const total = await safeCount('quiz_attempts');
     const todayStart = new Date(getDayStart()).toISOString();
     const weekAgo = new Date(getDaysAgo(7)).toISOString();
-    let todayC = 0, weekC = 0, scores = [];
-    try { const { count } = await supabase.from('quiz_attempts').select('*', { count: 'exact', head: true }).gte('timestamp', todayStart); todayC = count || 0; } catch {}
-    try { const { count } = await supabase.from('quiz_attempts').select('*', { count: 'exact', head: true }).gte('timestamp', weekAgo); weekC = count || 0; } catch {}
+    const todayC = await restCount('quiz_attempts', { timestamp: `gte.${todayStart}` });
+    const weekC = await restCount('quiz_attempts', { timestamp: `gte.${weekAgo}` });
+    let scores = [];
     try {
-      const { data } = await supabase.from('quiz_attempts').select('score').limit(1000);
+      const data = await restSelect('quiz_attempts', 'score', { limit: '1000' });
       scores = (data || []).map(q => q.score).filter(s => s !== null && s !== undefined);
     } catch {}
     const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
@@ -597,12 +648,10 @@ app.get('/api/quizzes/stats', requireSupabase, async (req, res) => {
 // ── Leaderboard ──────────────────────────────────────────────────────
 app.get('/api/leaderboard', requireSupabase, async (req, res) => {
   try {
-    const { data: users } = await supabase.from('users')
-      .select('id, username, emoji, leaderboard_streak, leaderboard_manual_score')
-      .limit(5000);
-    const { data: searches } = await supabase.from('search_events').select('user_id').limit(50000);
-    const { data: words } = await supabase.from('saved_words').select('user_id').limit(50000);
-    const { data: quizzes } = await supabase.from('quiz_attempts').select('user_id, score').limit(50000);
+    const users = await restSelect('users', 'id,username,emoji,leaderboard_streak,leaderboard_manual_score', { limit: '5000' });
+    const searches = await restSelect('search_events', 'user_id', { limit: '50000' });
+    const words = await restSelect('saved_words', 'user_id', { limit: '50000' });
+    const quizzes = await restSelect('quiz_attempts', 'user_id,score', { limit: '50000' });
 
     const searchCounts = {}, wordCounts = {}, quizScores = {};
     for (const s of searches || []) searchCounts[s.user_id] = (searchCounts[s.user_id] || 0) + 1;
@@ -643,7 +692,7 @@ app.post('/api/leaderboard/update', requireSupabase, async (req, res) => {
     const updates = {};
     if (manualScore !== undefined) updates.leaderboard_manual_score = manualScore;
     if (streak !== undefined) updates.leaderboard_streak = streak;
-    await supabase.from('users').update(updates).eq('id', userId);
+    await restUpdate('users', updates, { id: `eq.${userId}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -651,14 +700,14 @@ app.post('/api/leaderboard/update', requireSupabase, async (req, res) => {
 // ── App Config ───────────────────────────────────────────────────────
 app.get('/api/app-config', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('app_config').select('*').eq('id', 1).single();
+    const data = await restSingle('app_config', { id: `eq.1` });
     res.json(data || {});
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/app-config', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('app_config').update(req.body).eq('id', 1);
+    await restUpdate('app_config', req.body, { id: `eq.1` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -668,15 +717,15 @@ app.post('/api/notifications/send', requireSupabase, async (req, res) => {
   try {
     const { title, message, targetUserId } = req.body;
     if (targetUserId) {
-      const { data: user } = await supabase.from('users').select('fcm_token').eq('id', targetUserId).single();
+      const user = await restSingle('users', { id: `eq.${targetUserId}` });
       if (!user?.fcm_token) return res.status(400).json({ error: 'User has no FCM token' });
       await sendFcm(user.fcm_token, { title, body: message }, { type: 'admin_notification' });
-      await supabase.from('global_notifications').insert({ title, message, sentAt: new Date().toISOString(), success: true, sentCount: 1, deliveredCount: 1 });
+      await restInsert('global_notifications', { title, message, sentAt: new Date().toISOString(), success: true, sentCount: 1, deliveredCount: 1 });
     } else {
-      const { data: users } = await supabase.from('users').select('fcm_token').eq('status', 'active').not('fcm_token', 'is', null);
+      const users = await restSelect('users', 'fcm_token', { status: 'eq.active', fcm_token: 'not.is.null' });
       const tokens = (users || []).map(u => u.fcm_token).filter(Boolean);
       const result = await sendFcmMulticast(tokens, { title, body: message }, { type: 'admin_notification' });
-      await supabase.from('global_notifications').insert({
+      await restInsert('global_notifications', {
         title, message, sentAt: new Date().toISOString(), success: true,
         sentCount: tokens.length, deliveredCount: result.successCount,
       });
@@ -687,7 +736,7 @@ app.post('/api/notifications/send', requireSupabase, async (req, res) => {
 
 app.get('/api/notifications', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('global_notifications').select('*').order('sent_at', { ascending: false }).limit(50);
+    const data = await restSelect('global_notifications', '*', { order: 'sent_at.desc', limit: '50' });
     res.json({ notifications: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -695,21 +744,21 @@ app.get('/api/notifications', requireSupabase, async (req, res) => {
 // ── Experiences ──────────────────────────────────────────────────────
 app.get('/api/experiences', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('experiences').select('*').order('timestamp', { ascending: false }).limit(50);
+    const data = await restSelect('experiences', '*', { order: 'timestamp.desc', limit: '50' });
     res.json({ experiences: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/experiences', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('experiences').insert({ ...req.body, timestamp: new Date().toISOString() });
+    await restInsert('experiences', { ...req.body, timestamp: new Date().toISOString() });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/api/admin/experiences/:id', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('experiences').delete().eq('id', req.params.id);
+    await restDelete('experiences', { id: `eq.${req.params.id}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -718,8 +767,8 @@ app.delete('/api/admin/experiences/:id', requireSupabase, async (req, res) => {
 app.post('/api/register-fcm', requireSupabase, async (req, res) => {
   try {
     const { userId, fcmToken } = req.body;
-    await supabase.from('users').update({ fcm_token: fcmToken }).eq('id', userId);
-    await supabase.from('installs').update({ fcm_token: fcmToken }).eq('user_id', userId);
+    await restUpdate('users', { fcm_token: fcmToken }, { id: `eq.${userId}` });
+    await restUpdate('installs', { fcm_token: fcmToken }, { user_id: `eq.${userId}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -730,29 +779,26 @@ app.post('/api/auth/exchange-token', requireSupabase, async (req, res) => {
     const { supabaseToken } = req.body;
     if (!supabaseToken) return res.status(400).json({ error: 'Supabase token required' });
 
-    // Verify the Supabase auth token
-    const { data: { user }, error: authErr } = await supabase.auth.getUser(supabaseToken);
-    if (authErr || !user) return res.status(401).json({ error: 'Invalid token' });
+    const user = await authGetUser(supabaseToken);
+    if (!user?.id) return res.status(401).json({ error: 'Invalid token' });
 
     const uid = user.id;
     const email = user.email || '';
     const phone = user.phone || uid;
 
-    // Upsert user profile
     const existing = await getUserDoc(uid);
     if (!existing) {
       const now = new Date().toISOString();
-      await supabase.from('users').upsert({
+      await restUpsert('users', {
         id: uid, email, phone, username: email.split('@')[0] || uid,
         status: 'active', created_at: now, last_active: now,
       });
     } else {
-      await supabase.from('users').update({ last_active: new Date().toISOString() }).eq('id', uid);
+      await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${uid}` });
     }
-    // Ensure subscription record exists
-    await supabase.from('user_subscriptions').upsert(
+    await restUpsert('user_subscriptions',
       { user_id: uid, plan: 'free', active: false, lifetime_free: false },
-      { onConflict: 'user_id' }
+      'user_id'
     );
 
     const token = createToken(phone, uid);
@@ -771,42 +817,38 @@ app.post('/api/auth/register', requireSupabase, async (req, res) => {
     const cleanPhone = sanitize(phone);
     const cleanUsername = sanitize(username);
 
-    // Check if phone already exists
-    const existing = await supabase.from('users').select('id').eq('phone', cleanPhone).maybeSingle();
-    if (existing.data) {
-      // Update existing
+    const existing = await restMaybeSingle('users', { phone: `eq.${cleanPhone}` });
+    if (existing) {
       const hashedPassword = await bcrypt.hash(password, 10);
-      await supabase.from('users').update({
+      await restUpdate('users', {
         username: cleanUsername, password_hash: hashedPassword,
         device_name: sanitize(deviceName || ''), last_active: new Date().toISOString(),
-      }).eq('id', existing.data.id);
+      }, { id: `eq.${existing.id}` });
 
-      const token = createToken(cleanPhone, existing.data.id);
+      const token = createToken(cleanPhone, existing.id);
       return res.json({ success: true, phone: cleanPhone, username: cleanUsername, token });
     }
 
-    // Create new user in auth
-    const { data: authUser, error: createErr } = await supabase.auth.admin.createUser({
+    const authResult = await authAdminCreateUser({
       phone: cleanPhone, email: `${cleanPhone.replace('+', '')}@wordsnest.app`,
-      password: password, email_confirm: true, phone_confirm: true,
+      password, email_confirm: true, phone_confirm: true,
       user_metadata: { username: cleanUsername },
     });
-    if (createErr) return res.status(500).json({ error: createErr.message });
+    if (!authResult?.user?.id) return res.status(500).json({ error: authResult?.msg || 'Failed to create user' });
 
-    const uid = authUser.user.id;
+    const uid = authResult.user.id;
     const now = new Date().toISOString();
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Users table row is auto-created by the trigger, but we also store the password hash for legacy API compatibility
-    await supabase.from('users').update({
+    await restUpdate('users', {
       phone: cleanPhone, username: cleanUsername, password_hash: hashedPassword,
       device_name: sanitize(deviceName || ''), status: 'active',
       created_at: now, last_active: now, app_version: req.body.appVersion || '2.0.0',
-    }).eq('id', uid);
+    }, { id: `eq.${uid}` });
 
-    await supabase.from('user_subscriptions').upsert(
+    await restUpsert('user_subscriptions',
       { user_id: uid, plan: 'free', active: false, lifetime_free: false },
-      { onConflict: 'user_id' }
+      'user_id'
     );
 
     const token = createToken(cleanPhone, uid);
@@ -822,25 +864,23 @@ app.post('/api/auth/phone-signin', requireSupabase, async (req, res) => {
     if (!phone || !password) return res.status(400).json({ error: 'Phone and password required' });
 
     const cleanPhone = sanitize(phone);
-    const { data: user } = await supabase.from('users').select('id, password_hash, username').eq('phone', cleanPhone).single();
+    const user = await restSingle('users', { phone: `eq.${cleanPhone}` });
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
     const valid = await bcrypt.compare(password, user.password_hash || '');
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
-    await supabase.from('users').update({ last_active: new Date().toISOString() }).eq('id', user.id);
+    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${user.id}` });
     const token = createToken(cleanPhone, user.id);
     res.json({ success: true, token, username: user.username });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Google/email sign-in
 app.post('/api/auth/exchange-token-legacy', requireSupabase, async (req, res) => {
   try {
     const { firebaseToken } = req.body;
     if (!firebaseToken) return res.status(400).json({ error: 'Token required' });
 
-    // Decode the Firebase token locally (it's a JWT)
     const decoded = jwt.decode(firebaseToken);
     if (!decoded) return res.status(401).json({ error: 'Invalid token' });
 
@@ -851,16 +891,16 @@ app.post('/api/auth/exchange-token-legacy', requireSupabase, async (req, res) =>
     const existing = await getUserDoc(uid);
     if (!existing) {
       const now = new Date().toISOString();
-      await supabase.from('users').upsert({
+      await restUpsert('users', {
         id: uid, email, phone, username: email.split('@')[0] || uid,
         status: 'active', created_at: now, last_active: now,
       });
-      await supabase.from('user_subscriptions').upsert(
+      await restUpsert('user_subscriptions',
         { user_id: uid, plan: 'free', active: false, lifetime_free: false },
-        { onConflict: 'user_id' }
+        'user_id'
       );
     } else {
-      await supabase.from('users').update({ last_active: new Date().toISOString() }).eq('id', uid);
+      await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${uid}` });
     }
 
     const token = createToken(phone, uid);
@@ -873,7 +913,7 @@ app.post('/api/auth/exchange-token-legacy', requireSupabase, async (req, res) =>
 app.get('/api/debug/user/:phone', requireSupabase, async (req, res) => {
   try {
     const cleanPhone = sanitize(req.params.phone);
-    const { data } = await supabase.from('users').select('*').eq('phone', cleanPhone).single();
+    const data = await restSingle('users', { phone: `eq.${cleanPhone}` });
     res.json({ exists: !!data, data, queriedKey: cleanPhone });
   } catch { res.json({ exists: false, data: null }); }
 });
@@ -887,18 +927,17 @@ app.post('/api/subscribe', requireSupabase, requireJwt, async (req, res) => {
     const cleanTrxId = sanitize(trxId);
     const userId = req.userId;
 
-    const { data: user } = await supabase.from('users').select('id').eq('id', userId).single();
+    const user = await restSingle('users', { id: `eq.${userId}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Check duplicate trx
-    const { data: existingPay } = await supabase.from('user_payments').select('id').eq('trx_id', cleanTrxId).maybeSingle();
+    const existingPay = await restMaybeSingle('user_payments', { trx_id: `eq.${cleanTrxId}` });
     if (existingPay) return res.status(409).json({ error: 'This Transaction ID has already been submitted' });
 
-    await supabase.from('user_payments').insert({
+    await restInsert('user_payments', {
       user_id: userId, trx_id: cleanTrxId, amount: 100, date: new Date().toISOString(),
       verified: false,
     });
-    await supabase.from('users').update({ last_active: new Date().toISOString() }).eq('id', userId);
+    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${userId}` });
 
     res.json({ success: true, message: 'Payment submitted. Awaiting admin verification.' });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -907,14 +946,13 @@ app.post('/api/subscribe', requireSupabase, requireJwt, async (req, res) => {
 app.get('/api/subscription/status', requireSupabase, requireJwt, async (req, res) => {
   try {
     const userId = req.userId;
-    const { data: user } = await supabase.from('users').select('*, user_subscriptions(*)').eq('id', userId).single();
+    const user = await restSingle('users', { id: `eq.${userId}`, select: '*,user_subscriptions(*)' });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const sub = user.user_subscriptions || {};
     const premium = sub.active || sub.lifetime_free;
 
-    const { data: usage } = await supabase.from('daily_usage')
-      .select('count').eq('user_id', userId).eq('date', getTodayStr()).maybeSingle();
+    const usage = await restMaybeSingle('daily_usage', { user_id: `eq.${userId}`, date: `eq.${getTodayStr()}` });
     const dailyCount = usage?.count || 0;
     const inCooldown = user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now();
 
@@ -934,19 +972,19 @@ app.put('/api/admin/users/:phone/lifetime-free', requireSupabase, async (req, re
   try {
     const { phone } = req.params;
     const { grant } = req.body;
-    const { data: user } = await supabase.from('users').select('id').eq('phone', sanitize(phone)).single();
+    const user = await restSingle('users', { phone: `eq.${sanitize(phone)}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    await supabase.from('user_subscriptions').upsert({
+    await restUpsert('user_subscriptions', {
       user_id: user.id, plan: grant ? 'lifetime' : 'free',
       active: !!grant, lifetime_free: !!grant,
       expires_at: null, verified_by: req.headers['x-admin-id'] || 'admin',
       verified_at: grant ? new Date().toISOString() : null,
-    }, { onConflict: 'user_id' });
-    await supabase.from('users').update({ last_active: new Date().toISOString() }).eq('id', user.id);
+    }, 'user_id');
+    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${user.id}` });
 
     if (grant) {
-      const { data: u } = await supabase.from('users').select('fcm_token').eq('id', user.id).single();
+      const u = await restSingle('users', { id: `eq.${user.id}` });
       if (u?.fcm_token) {
         await sendFcm(u.fcm_token, { title: '🌟 Lifetime Free Granted!', body: 'Congratulations! You now have lifetime free access.' }, { type: 'subscription_update' });
       }
@@ -959,10 +997,9 @@ app.put('/api/admin/users/:phone/ban', requireSupabase, async (req, res) => {
   try {
     const { phone } = req.params;
     const { ban } = req.body;
-    const { data: user } = await supabase.from('users').select('id').eq('phone', sanitize(phone)).single();
+    const user = await restSingle('users', { phone: `eq.${sanitize(phone)}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
-
-    await supabase.from('users').update({ status: ban ? 'banned' : 'active', last_active: new Date().toISOString() }).eq('id', user.id);
+    await restUpdate('users', { status: ban ? 'banned' : 'active', last_active: new Date().toISOString() }, { id: `eq.${user.id}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -971,15 +1008,15 @@ app.put('/api/admin/users/:phone/cooldown', requireSupabase, async (req, res) =>
   try {
     const { phone } = req.params;
     const { cooldownMinutes } = req.body;
-    const { data: user } = await supabase.from('users').select('id').eq('phone', sanitize(phone)).single();
+    const user = await restSingle('users', { phone: `eq.${sanitize(phone)}` });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     if (cooldownMinutes === null || cooldownMinutes <= 0) {
-      await supabase.from('users').update({ cooldown_until: null }).eq('id', user.id);
-      await supabase.from('daily_usage').upsert({ user_id: user.id, date: getTodayStr(), count: 0 }, { onConflict: 'user_id,date' });
+      await restUpdate('users', { cooldown_until: null }, { id: `eq.${user.id}` });
+      await restUpsert('daily_usage', { user_id: user.id, date: getTodayStr(), count: 0 }, 'user_id,date');
     } else {
       const until = new Date(Date.now() + cooldownMinutes * 60 * 1000).toISOString();
-      await supabase.from('users').update({ cooldown_until: until }).eq('id', user.id);
+      await restUpdate('users', { cooldown_until: until }, { id: `eq.${user.id}` });
     }
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -987,7 +1024,7 @@ app.put('/api/admin/users/:phone/cooldown', requireSupabase, async (req, res) =>
 
 app.get('/api/admin/payments', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('user_payments').select('*, users(username, device_name)').order('date', { ascending: false });
+    const data = await restSelect('user_payments', '*,users(username,device_name)', { order: 'date.desc' });
     res.json({ payments: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -997,30 +1034,25 @@ app.post('/api/admin/verify-payment', requireSupabase, async (req, res) => {
     const { trxId } = req.body;
     const cleanTrx = sanitize(trxId);
 
-    // Find the payment
-    const { data: payment } = await supabase.from('user_payments')
-      .select('*, users!inner(id, fcm_token)').eq('trx_id', cleanTrx).single();
+    const payment = await restSingle('user_payments', { trx_id: `eq.${cleanTrx}`, select: '*,users!inner(id,fcm_token)' });
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
 
     const userId = payment.user_id;
 
-    // Update payment
-    await supabase.from('user_payments').update({
+    await restUpdate('user_payments', {
       verified: true, verified_by: req.headers['x-admin-id'] || 'admin',
       verified_at: new Date().toISOString(),
-    }).eq('trx_id', cleanTrx);
+    }, { trx_id: `eq.${cleanTrx}` });
 
-    // Grant lifetime
-    await supabase.from('user_subscriptions').upsert({
+    await restUpsert('user_subscriptions', {
       user_id: userId, plan: 'lifetime', active: true, lifetime_free: true,
       expires_at: null, verified_by: req.headers['x-admin-id'] || 'admin',
       verified_at: new Date().toISOString(),
-    }, { onConflict: 'user_id' });
+    }, 'user_id');
 
-    await supabase.from('users').update({ last_active: new Date().toISOString() }).eq('id', userId);
+    await restUpdate('users', { last_active: new Date().toISOString() }, { id: `eq.${userId}` });
 
-    // Send confirmation FCM
-    const { data: user } = await supabase.from('users').select('fcm_token').eq('id', userId).single();
+    const user = await restSingle('users', { id: `eq.${userId}` });
     if (user?.fcm_token) {
       await sendFcm(user.fcm_token, { title: '✅ Payment Verified!', body: 'Your subscription is now active. Thank you!' }, { type: 'payment_verified' });
     }
@@ -1032,14 +1064,14 @@ app.post('/api/admin/verify-payment', requireSupabase, async (req, res) => {
 // ── Reports ──────────────────────────────────────────────────────────
 app.get('/api/reports', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('reports').select('*').order('timestamp', { ascending: false }).limit(100);
+    const data = await restSelect('reports', '*', { order: 'timestamp.desc', limit: '100' });
     res.json({ reports: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/reports', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('reports').insert({
+    await restInsert('reports', {
       message: req.body.message, username: req.body.username || '',
       userId: req.body.userId || '', appVersion: req.body.appVersion || 'unknown',
       timestamp: new Date().toISOString(), status: 'unread',
@@ -1050,14 +1082,14 @@ app.post('/api/reports', requireSupabase, async (req, res) => {
 
 app.put('/api/admin/reports/:id/read', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('reports').update({ status: 'read' }).eq('id', req.params.id);
+    await restUpdate('reports', { status: 'read' }, { id: `eq.${req.params.id}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/api/admin/reports/:id', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('reports').delete().eq('id', req.params.id);
+    await restDelete('reports', { id: `eq.${req.params.id}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1082,8 +1114,8 @@ app.post('/api/ai-analyze', requireSupabase, requireJwt, async (req, res) => {
 
     let config = { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
     try {
-      const { data } = await supabase.from('app_config').select('ai_provider, ai_model, ai_gemini_model, ai_enabled').eq('id', 1).single();
-      if (data) config = { ...config, aiProvider: data.ai_provider, aiModel: data.ai_model, aiGeminiModel: data.ai_gemini_model, aiEnabled: data.ai_enabled };
+      const d = await restSingle('app_config', { id: `eq.1`, select: 'ai_provider,ai_model,ai_gemini_model,ai_enabled' });
+      if (d) config = { ...config, aiProvider: d.ai_provider, aiModel: d.ai_model, aiGeminiModel: d.ai_gemini_model, aiEnabled: d.ai_enabled };
     } catch {}
 
     if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
@@ -1125,10 +1157,8 @@ app.post('/api/ai-analyze', requireSupabase, requireJwt, async (req, res) => {
     if (!aiResult) return res.status(502).json({ error: 'AI analysis failed' });
 
     // Log search event
-    await supabase.from('search_events').insert({ user_id: userId, word, timestamp: new Date().toISOString() });
-
-    // Save to search_history
-    await supabase.from('search_history').insert({ user_id: userId, word, timestamp: new Date().toISOString() });
+    await restInsert('search_events', { user_id: userId, word, timestamp: new Date().toISOString() });
+    await restInsert('search_history', { user_id: userId, word, timestamp: new Date().toISOString() });
 
     res.json({
       ...aiResult, _meta: { dailyRemaining: limit.remaining, isPremium: limit.isPremium || false },
@@ -1144,8 +1174,8 @@ app.post('/api/generate', requireSupabase, requireJwt, async (req, res) => {
 
     let config = { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiEnabled: true };
     try {
-      const { data } = await supabase.from('app_config').select('ai_provider, ai_model, ai_enabled').eq('id', 1).single();
-      if (data) config = { ...config, aiProvider: data.ai_provider, aiModel: data.ai_model, aiEnabled: data.ai_enabled };
+      const d = await restSingle('app_config', { id: `eq.1`, select: 'ai_provider,ai_model,ai_enabled' });
+      if (d) config = { ...config, aiProvider: d.ai_provider, aiModel: d.ai_model, aiEnabled: d.ai_enabled };
     } catch {}
     if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
 
@@ -1170,23 +1200,20 @@ app.post('/api/admin/quiz-pool/publish', requireSupabase, async (req, res) => {
     if (!Array.isArray(questions) || questions.length === 0) return res.status(400).json({ error: 'Questions array required' });
 
     // Delete existing pool
-    await supabase.from('quiz_pool').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
-    // Insert new questions
+    await restDelete('quiz_pool', { id: `not.eq.00000000-0000-0000-0000-000000000000` });
     const now = new Date().toISOString();
     const records = questions.map((q, i) => ({
       word: q.word || null, question: q.question, options: q.options, correct_index: q.correctIndex,
       hint: q.hint || null, difficulty: q.difficulty || 'medium', created_at: now, index: i,
     }));
-    await supabase.from('quiz_pool').insert(records);
-
+    if (records.length) await restInsert('quiz_pool', records);
     res.json({ success: true, count: records.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/quiz-pool', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('quiz_pool').select('*').order('created_at', { ascending: false }).limit(10);
+    const data = await restSelect('quiz_pool', '*', { order: 'created_at.desc', limit: '10' });
     res.json({ questions: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1194,18 +1221,18 @@ app.get('/api/quiz-pool', requireSupabase, async (req, res) => {
 // ── AI Notification Agent Config ─────────────────────────────────────
 app.get('/api/ai-notification-agent', requireSupabase, async (req, res) => {
   try {
-    const { data } = await supabase.from('ai_notification_agent').select('*').eq('id', 1).single();
+    const data = await restSingle('ai_notification_agent', { id: `eq.1` });
     res.json(data || {});
   } catch { res.json({}); }
 });
 
 app.post('/api/ai-notification-agent', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('ai_notification_agent').update({
+    await restUpdate('ai_notification_agent', {
       prompt: req.body.prompt, enabled: req.body.enabled, interval_minutes: req.body.intervalMinutes,
       time_of_day: req.body.timeOfDay, updated_at: new Date().toISOString(),
       last_sent_at: req.body.lastSentAt, next_send_at: req.body.nextSendAt,
-    }).eq('id', 1);
+    }, { id: `eq.1` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1213,25 +1240,20 @@ app.post('/api/ai-notification-agent', requireSupabase, async (req, res) => {
 // ── AI Notification Scheduler (called by cron) ───────────────────────
 app.post('/api/ai-notification-tick', requireSupabase, async (req, res) => {
   try {
-    const { data: agent } = await supabase.from('ai_notification_agent').select('*').eq('id', 1).single();
+    const agent = await restSingle('ai_notification_agent', { id: `eq.1` });
     if (!agent || !agent.enabled) return res.json({ skipped: true, reason: 'disabled' });
 
     const now = Date.now();
     const nextSend = agent.next_send_at ? new Date(agent.next_send_at).getTime() : 0;
     if (nextSend > now) return res.json({ skipped: true, reason: 'not yet' });
 
-    // Get active users with FCM tokens
-    const { data: users } = await supabase.from('users')
-      .select('fcm_token').eq('status', 'active').not('fcm_token', 'is', null);
+    const users = await restSelect('users', 'fcm_token', { status: 'eq.active', fcm_token: 'not.is.null' });
     const tokens = (users || []).map(u => u.fcm_token).filter(Boolean);
     if (!tokens.length) return res.json({ skipped: true, reason: 'no users' });
 
-    // Get recent search events for AI prompt context
-    const { data: recentSearches } = await supabase.from('search_events')
-      .select('word').gte('timestamp', new Date(now - 3600000).toISOString());
+    const recentSearches = await restSelect('search_events', 'word', { timestamp: `gte.${new Date(now - 3600000).toISOString()}` });
     const recentWords = [...new Set((recentSearches || []).map(s => s.word?.toLowerCase()).filter(Boolean))];
 
-    // Generate notification message via AI
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     let message = 'Time to learn some new words! 📚';
     if (GROQ_API_KEY && agent.prompt) {
@@ -1251,24 +1273,21 @@ app.post('/api/ai-notification-tick', requireSupabase, async (req, res) => {
       } catch {}
     }
 
-    // Send notifications
     const result = await sendFcmMulticast(tokens, { title: '📖 Words Nest', body: message }, { type: 'ai_notification' });
 
-    // Log
     const notifId = `ai_${now}`;
-    await supabase.from('global_notifications').insert({
+    await restInsert('global_notifications', {
       id: notifId, title: 'AI Notification', message,
       target: 'ai_automation', sentAt: new Date(now).toISOString(),
       success: true, sentCount: tokens.length, deliveredCount: result.successCount,
       aiGenerated: true, aiPrompt: agent.prompt,
     });
 
-    // Update next send
     const interval = (agent.interval_minutes || 60) * 60 * 1000;
-    await supabase.from('ai_notification_agent').update({
+    await restUpdate('ai_notification_agent', {
       last_sent_at: new Date(now).toISOString(),
       next_send_at: new Date(now + interval).toISOString(),
-    }).eq('id', 1);
+    }, { id: `eq.1` });
 
     res.json({ success: true, sent: result.successCount, failed: result.failureCount });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1287,10 +1306,10 @@ app.post('/api/waitlist/join', requireSupabase, async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email required' });
 
-    const { data: existing } = await supabase.from('waitlist_ios').select('id').eq('email', email.toLowerCase()).maybeSingle();
+    const existing = await restMaybeSingle('waitlist_ios', { email: `eq.${email.toLowerCase()}` });
     if (existing) return res.status(409).json({ error: 'Already on waitlist' });
 
-    await supabase.from('waitlist_ios').insert({ email: email.toLowerCase(), created_at: new Date().toISOString() });
+    await restInsert('waitlist_ios', { email: email.toLowerCase(), created_at: new Date().toISOString() });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1299,16 +1318,14 @@ app.post('/api/waitlist/join', requireSupabase, async (req, res) => {
 app.get('/api/notifications/:userId', requireSupabase, async (req, res) => {
   try {
     const { userId } = req.params;
-    const { data } = await supabase.from('user_notifications')
-      .select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(20);
+    const data = await restSelect('user_notifications', '*', { user_id: `eq.${userId}`, order: 'created_at.desc', limit: '20' });
     res.json({ notifications: data || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.put('/api/notifications/:userId/read/:notificationId', requireSupabase, async (req, res) => {
   try {
-    await supabase.from('user_notifications').update({ is_read: true })
-      .eq('id', req.params.notificationId).eq('user_id', req.params.userId);
+    await restUpdate('user_notifications', { is_read: true }, { id: `eq.${req.params.notificationId}`, user_id: `eq.${req.params.userId}` });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1317,7 +1334,7 @@ app.put('/api/notifications/:userId/read/:notificationId', requireSupabase, asyn
 app.get('/api/installs/stats', requireSupabase, async (req, res) => {
   try {
     const total = await safeCount('installs');
-    const { data: users } = await supabase.from('users').select('status');
+    const users = await restSelect('users', 'status', { limit: '50000' });
     const active = (users || []).filter(u => u.status === 'active').length;
     res.json({ totalInstalls: total, activeUsers: active });
   } catch (e) { res.status(500).json({ error: e.message }); }
