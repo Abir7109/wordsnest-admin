@@ -770,41 +770,55 @@ app.put('/api/admin/leaderboard/:uid', requireAdmin, async (req, res) => {
 });
 
 // ── App Config ───────────────────────────────────────────────────────
+const appConfigCache = { data: null, ts: 0, TTL: 15000 };
+
+function buildAppConfigResponse(data) {
+  return {
+    isAppAlive: data.is_app_alive ?? true,
+    underMaintenance: data.under_maintenance ?? false,
+    maintenanceTitle: data.maintenance_title || '',
+    maintenanceMessage: data.maintenance_message || '',
+    maintenanceEstimatedTime: data.maintenance_estimated_time || '',
+    forceUpdate: data.force_update ?? false,
+    softUpdate: data.soft_update ?? false,
+    currentVersion: data.current_version || '',
+    minRequiredVersion: data.min_required_version || '',
+    updateUrl: data.update_url || '',
+    updateMessage: data.update_message || '',
+    dailyQuizLimit: data.daily_quiz_limit ?? 3,
+    dailyWordLimit: data.daily_word_limit ?? 10,
+    enableNotifications: data.enable_notifications ?? true,
+    enableLeaderboard: data.enable_leaderboard ?? true,
+    enableBackup: data.enable_backup ?? false,
+    adsEnabled: data.ads_enabled ?? false,
+    apiEndpoint: data.api_endpoint || '',
+    featureFlags: data.feature_flags || {},
+    aiProvider: data.ai_provider || 'groq',
+    aiModel: data.ai_model || 'llama-3.3-70b-versatile',
+    aiGeminiModel: data.ai_gemini_model || 'gemini-2.0-flash',
+    aiEnabled: data.ai_enabled ?? true,
+  };
+}
+
 app.get('/api/app-config', async (req, res) => {
   try {
+    if (appConfigCache.data && Date.now() - appConfigCache.ts < appConfigCache.TTL) {
+      return res.json(appConfigCache.data);
+    }
     const data = await awGet('app_config', '1');
     if (!data) return res.json({});
-    res.json({
-      isAppAlive: data.is_app_alive ?? true,
-      underMaintenance: data.under_maintenance ?? false,
-      maintenanceTitle: data.maintenance_title || '',
-      maintenanceMessage: data.maintenance_message || '',
-      maintenanceEstimatedTime: data.maintenance_estimated_time || '',
-      forceUpdate: data.force_update ?? false,
-      softUpdate: data.soft_update ?? false,
-      currentVersion: data.current_version || '',
-      minRequiredVersion: data.min_required_version || '',
-      updateUrl: data.update_url || '',
-      updateMessage: data.update_message || '',
-      dailyQuizLimit: data.daily_quiz_limit ?? 3,
-      dailyWordLimit: data.daily_word_limit ?? 10,
-      enableNotifications: data.enable_notifications ?? true,
-      enableLeaderboard: data.enable_leaderboard ?? true,
-      enableBackup: data.enable_backup ?? false,
-      adsEnabled: data.ads_enabled ?? false,
-      apiEndpoint: data.api_endpoint || '',
-      featureFlags: data.feature_flags || {},
-      aiProvider: data.ai_provider || 'groq',
-      aiModel: data.ai_model || 'llama-3.3-70b-versatile',
-      aiGeminiModel: data.ai_gemini_model || 'gemini-2.0-flash',
-      aiEnabled: data.ai_enabled ?? true,
-    });
+    const response = buildAppConfigResponse(data);
+    appConfigCache.data = response;
+    appConfigCache.ts = Date.now();
+    res.json(response);
   } catch (e) { safeError(res, e, 'app-config-get'); }
 });
 
 app.post('/api/app-config', requireAdmin, async (req, res) => {
   try {
     await awUpdate('app_config', '1', req.body);
+    appConfigCache.data = null;
+    appConfigCache.ts = 0;
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'app-config-update'); }
 });
@@ -1075,6 +1089,8 @@ app.post('/api/subscribe', requireJwt, async (req, res) => {
 app.get('/api/subscription/status', requireJwt, async (req, res) => {
   try {
     const userId = req.userId;
+    const now = Date.now();
+
     const user = await awGet('users', userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -1083,7 +1099,7 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
 
     const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', getTodayStr())]);
     const dailyCount = usage?.count || 0;
-    const inCooldown = user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now();
+    const inCooldown = user.cooldown_until && new Date(user.cooldown_until).getTime() > now;
 
     res.json({
       plan: sub.plan || 'free', active: premium, lifetimeFree: sub.lifetime_free || false,
@@ -1092,7 +1108,7 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
       dailyUsed: dailyCount, dailyLimit: premium ? -1 : 10,
       username: user.username || '', status: user.status || 'active',
       coolDownUntil: user.cooldown_until ? new Date(user.cooldown_until).getTime() : null,
-      serverTime: Date.now(),
+      serverTime: now,
     });
   } catch (e) { safeError(res, e, 'subscription-status'); }
 });
@@ -1281,7 +1297,7 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
 
     if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
 
-    const prompt = `Analyze the English word "${word}" and return ONLY valid JSON (no markdown, no code block). Format: { "word": "...", "type": "Noun|Verb|Adjective|Adverb|Preposition|Conjunction|Pronoun|Interjection", "definition": "...", "phonetic": "/.../", "synonyms": "comma,separated", "antonyms": "comma,separated", "simpleSentence": "...", "complexSentence": "...", "compoundSentence": "..." }`;
+    const prompt = `Analyze the English word "${word}" and return ONLY valid JSON (no markdown, no code block). Format: { "word": "...", "type": "Noun|Verb|Adjective|Adverb|Preposition|Conjunction|Pronoun|Interjection", "definition": "...", "phonetic": "/.../", "synonyms": "comma,separated", "antonyms": "comma,separated", "simpleSentence": "...", "complexSentence": "...", "compoundSentence": "...", "nounForm": "the noun form (empty if none)", "verbForm": "the verb form (empty if none)", "adjectiveForm": "the adjective form (empty if none)", "adverbForm": "the adverb form (empty if none)" }`;
 
     let aiResult = null;
     if (config.aiProvider === 'gemini' && GEMINI_API_KEY) {
@@ -1317,9 +1333,11 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
 
     if (!aiResult) return res.status(502).json({ error: 'AI analysis failed' });
 
-    // Log search event
-    await awCreate('search_events', crypto.randomUUID(), { user_id: userId, word, timestamp: new Date().toISOString() });
-    await awCreate('search_history', crypto.randomUUID(), { user_id: userId, word, timestamp: new Date().toISOString() });
+    // Log search event with username
+    const userDoc = await awGet('users', userId).catch(() => null);
+    const uname = userDoc?.username || req.userPhone || 'unknown';
+    await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word, timestamp: new Date().toISOString() });
+    await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word, timestamp: new Date().toISOString() });
 
     res.json({
       ...aiResult, _meta: { dailyRemaining: limit.remaining, isPremium: limit.isPremium || false },
