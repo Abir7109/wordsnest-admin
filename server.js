@@ -1283,13 +1283,21 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
 
     const userId = req.userId;
 
-    // Phase 1: Check daily usage (DO NOT increment yet — only increment after AI succeeds)
+    // Phase 1: Check daily usage
     const limit = await checkDailyUsage(userId);
     if (!limit.allowed) {
       return res.status(429).json({ error: limit.reason === 'cool_down' ? 'Cooling down. Try again later.' : 'Daily limit reached', remaining: 0, ...limit });
     }
 
-    // Call Groq/Gemini AI (same logic as before - uses AI provider from config)
+    // Phase 2: Record this search immediately — admin must see every search, rate limit after 10
+    await incrementDailyUsage(userId);
+    const userDoc = await awGet('users', userId).catch(() => null);
+    const uname = userDoc?.username || req.userPhone || 'unknown';
+    const wordLower = word.toLowerCase();
+    await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() });
+    await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() });
+
+    // Phase 3: Call AI
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
@@ -1338,7 +1346,7 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
 
     if (!aiResult) return res.status(502).json({ error: 'AI analysis failed' });
 
-    // Phase 2: Gate premium fields for free users
+    // Phase 4: Gate premium fields for free users
     if (!limit.isPremium) {
       aiResult.banglaMeaning = '';
       aiResult.ieltsBand = '';
@@ -1346,13 +1354,6 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
       aiResult.complexSentence = '';
       aiResult.compoundSentence = '';
     }
-
-    // Phase 3: AI succeeded — now increment daily usage and log the search
-    await incrementDailyUsage(userId);
-    const userDoc = await awGet('users', userId).catch(() => null);
-    const uname = userDoc?.username || req.userPhone || 'unknown';
-    await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word, timestamp: new Date().toISOString() });
-    await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word, timestamp: new Date().toISOString() });
 
     res.json({
       ...aiResult, _meta: { dailyRemaining: limit.remaining, isPremium: limit.isPremium || false },
