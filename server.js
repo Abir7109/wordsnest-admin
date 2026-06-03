@@ -1290,7 +1290,9 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
     }
 
     // Phase 2: Record this search immediately — admin must see every search, rate limit after 10
-    await incrementDailyUsage(userId);
+    if (!limit.isPremium) {
+      await incrementDailyUsage(userId);
+    }
     const userDoc = await awGet('users', userId).catch(() => null);
     const uname = userDoc?.username || req.userPhone || 'unknown';
     const wordLower = word.toLowerCase();
@@ -1344,7 +1346,16 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
       } catch {}
     }
 
-    if (!aiResult) return res.status(502).json({ error: 'AI analysis failed' });
+    // Post-increment remaining (Phase 2 incremented the counter, so limit.remaining is now 1 less for free users)
+    const postRemaining = limit.isPremium ? -1 : Math.max(0, limit.remaining - 1);
+
+    if (!aiResult) {
+      return res.status(502).json({
+        error: 'AI analysis failed',
+        remaining: postRemaining,
+        isPremium: limit.isPremium || false,
+      });
+    }
 
     // Phase 4: Gate premium fields for free users
     if (!limit.isPremium) {
@@ -1356,7 +1367,7 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
     }
 
     res.json({
-      ...aiResult, _meta: { dailyRemaining: limit.remaining, isPremium: limit.isPremium || false },
+      ...aiResult, _meta: { dailyRemaining: postRemaining, isPremium: limit.isPremium || false },
     });
   } catch (e) { safeError(res, e, 'ai-analyze'); }
 });
