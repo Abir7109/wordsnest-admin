@@ -475,14 +475,17 @@ app.get('/api/dashboard/recent-activity', requireAdmin, async (req, res) => {
 // ── Users ────────────────────────────────────────────────────────────
 app.get('/api/users', requireAdmin, async (req, res) => {
   try {
-    const [users, subs, wordCounts, quizCounts] = await Promise.all([
+    const [users, subs, wordCounts, quizCounts, usageRecords] = await Promise.all([
       awList('users', [Query.orderDesc('last_active'), Query.limit(100)]),
       awList('user_subscriptions', [Query.limit(5000)]),
       awList('saved_words', [Query.limit(50000)]),
       awList('quiz_attempts', [Query.limit(50000)]),
+      awList('daily_usage', [Query.equal('date', getTodayStr()), Query.limit(5000)]),
     ]);
     const subMap = {};
-    for (const s of subs || []) subMap[s.user_id] = { plan: s.plan, active: s.active, lifetimeFree: s.lifetime_free, expiresAt: s.expires_at, dailyUsage: s.daily_usage };
+    for (const s of subs || []) subMap[s.user_id] = { plan: s.plan, active: s.active, lifetimeFree: s.lifetime_free, expiresAt: s.expires_at };
+    const usageMap = {};
+    for (const r of usageRecords || []) usageMap[r.user_id] = r.count || 0;
     const wc = {}; for (const w of wordCounts || []) wc[w.user_id] = (wc[w.user_id] || 0) + 1;
     const qc = {}; for (const q of quizCounts || []) qc[q.user_id] = (qc[q.user_id] || 0) + 1;
     const enriched = (users || []).map(u => ({
@@ -490,6 +493,7 @@ app.get('/api/users', requireAdmin, async (req, res) => {
       lastActive: new Date(u.last_active).getTime(), wordCount: wc[u.id] || 0, quizCount: qc[u.id] || 0,
       banned: u.status === 'banned', coolDownUntil: u.cooldown_until ? new Date(u.cooldown_until).getTime() : null,
       rateLimitHits: u.rate_limit_hits || 0, deviceName: u.device_name, created_at: u.created_at,
+      dailyUsage: usageMap[u.id] || 0,
     }));
     res.json({ users: enriched });
   } catch (e) { safeError(res, e, 'users-list'); }
