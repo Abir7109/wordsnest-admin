@@ -307,15 +307,24 @@ async function awGetUser(id) {
 
 async function checkDailyUsage(userId) {
   const today = getTodayStr();
-  const user = await awGet('users', userId);
-  if (!user) return { allowed: false, remaining: 0, reason: 'User not found' };
+  const user = await awGet('users', userId).catch(() => null);
+  if (!user) return { allowed: false, remaining: 0, reason: 'user_not_found' };
 
-  const sub = await awFind('user_subscriptions', [Query.equal('user_id', userId)]);
-  if (sub && (sub.active || sub.lifetime_free)) return { allowed: true, remaining: -1, isPremium: true, count: 0 };
+  const premium = isPremium(user);
+  if (premium) return { allowed: true, remaining: -1, isPremium: true, count: 0 };
 
-  if (user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now()) {
-    return { allowed: false, remaining: 0, reason: 'cool_down' };
+  const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
+  const count = usage?.count || 0;
+
+  if (count >= 10) {
+    const cooldownUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await awUpdate('users', userId, { cooldown_until: cooldownUntil });
+    await awUpdate('users', userId, { rate_limit_hits: (user.rate_limit_hits || 0) + 1 });
+    return { allowed: false, remaining: 0, reason: 'limit_reached' };
   }
+
+  return { allowed: true, remaining: 10 - count, isPremium: false, count: count };
+}
 
   const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
   const count = usage?.count || 0;
@@ -1346,8 +1355,8 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
       } catch {}
     }
 
-    // Post-increment remaining — limit.remaining already reflects pre-increment count
-    const postRemaining = limit.isPremium ? -1 : Math.max(0, limit.remaining);
+    // Post-increment remaining — daily_usage was incremented after checkDailyUsage, so subtract 1
+    const postRemaining = limit.isPremium ? -1 : Math.max(0, limit.remaining - 1);
 
     if (!aiResult) {
       return res.status(502).json({
