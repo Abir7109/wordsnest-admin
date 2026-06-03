@@ -958,7 +958,7 @@ app.post('/api/auth/phone-signin', async (req, res) => {
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
     await awUpdate('users', user.id, { last_active: new Date().toISOString() });
-    const token = createToken(cleanPhone, user.id);
+    const token = createToken(user.phone || user.email, user.id);
     res.json({ success: true, token, username: user.username, uid: user.id });
   } catch (e) { safeError(res, e, 'phone-signin'); }
 });
