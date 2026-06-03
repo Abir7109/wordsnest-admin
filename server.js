@@ -327,7 +327,7 @@ async function checkDailyUsage(userId) {
     return { allowed: false, remaining: 0, reason: 'limit_reached' };
   }
 
-  return { allowed: true, remaining: 9 - count, isPremium: false, count: count };
+  return { allowed: true, remaining: 10 - count, isPremium: false, count: count };
 }
 
 async function incrementDailyUsage(userId) {
@@ -1346,8 +1346,8 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
       } catch {}
     }
 
-    // Post-increment remaining (Phase 2 incremented the counter, so limit.remaining is now 1 less for free users)
-    const postRemaining = limit.isPremium ? -1 : Math.max(0, limit.remaining - 1);
+    // Post-increment remaining — limit.remaining already reflects pre-increment count
+    const postRemaining = limit.isPremium ? -1 : Math.max(0, limit.remaining);
 
     if (!aiResult) {
       return res.status(502).json({
