@@ -663,14 +663,14 @@ app.get('/api/searches/stats', requireAdmin, async (req, res) => {
     const weekAgo = new Date(getDaysAgo(7)).toISOString();
     const todayC = await awCount('search_events', [Query.greaterThan('timestamp', todayStart)]);
     const weekC = await awCount('search_events', [Query.greaterThan('timestamp', weekAgo)]);
-    let topWords = [];
+    let topSearches = [];
     try {
       const data = await awList('search_events', [Query.limit(50000)]);
       const freq = {};
       for (const s of data || []) { const w = s.word?.toLowerCase(); if (w) freq[w] = (freq[w] || 0) + 1; }
-      topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
+      topSearches = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
     } catch {}
-    res.json({ total, today: todayC, thisWeek: weekC, uniqueWords: topWords.length, topWords });
+    res.json({ total, today: todayC, thisWeek: weekC, uniqueWords: topSearches.length, topSearches });
   } catch (e) { safeError(res, e, 'searches-stats'); }
 });
 
