@@ -1304,7 +1304,7 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
 
     if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
 
-    const prompt = `Analyze the English word "${word}" and return ONLY valid JSON (no markdown, no code block). Format: { "word": "...", "type": "Noun|Verb|Adjective|Adverb|Preposition|Conjunction|Pronoun|Interjection", "definition": "...", "phonetic": "/.../", "synonyms": "comma,separated", "antonyms": "comma,separated", "simpleSentence": "...", "complexSentence": "...", "compoundSentence": "...", "nounForm": "the noun form (empty if none)", "verbForm": "the verb form (empty if none)", "adjectiveForm": "the adjective form (empty if none)", "adverbForm": "the adverb form (empty if none)" }`;
+    const prompt = `Analyze the English word "${word}" and return ONLY valid JSON (no markdown, no code block). Format: { "word": "...", "type": "Noun|Verb|Adjective|Adverb|Preposition|Conjunction|Pronoun|Interjection", "definition": "...", "phonetic": "/.../", "synonyms": "comma,separated", "antonyms": "comma,separated", "simpleSentence": "...", "complexSentence": "...", "compoundSentence": "...", "nounForm": "the noun form (empty if none)", "verbForm": "the verb form (empty if none)", "adjectiveForm": "the adjective form (empty if none)", "adverbForm": "the adverb form (empty if none)", "banglaMeaning": "the meaning of the word in Bangla language (বাংলা অর্থ)" }`;
 
     let aiResult = null;
     if (config.aiProvider === 'gemini' && GEMINI_API_KEY) {
