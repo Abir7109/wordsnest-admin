@@ -316,6 +316,11 @@ async function checkDailyUsage(userId) {
   const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
   const count = usage?.count || 0;
 
+  // Auto-clear stale cooldown from previous day if daily count has reset
+  if (user.cooldown_until && count === 0) {
+    await awUpdate('users', userId, { cooldown_until: null });
+  }
+
   if (count >= 10) {
     const cooldownUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     await awUpdate('users', userId, { cooldown_until: cooldownUntil });
@@ -1103,7 +1108,15 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
 
     const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', getTodayStr())]);
     const dailyCount = usage?.count || 0;
-    const inCooldown = user.cooldown_until && new Date(user.cooldown_until).getTime() > now;
+
+    // Auto-clear stale cooldown from previous day if daily count has reset
+    let cooldownUntil = user.cooldown_until ? new Date(user.cooldown_until).getTime() : null;
+    if (cooldownUntil && dailyCount === 0) {
+      await awUpdate('users', userId, { cooldown_until: null });
+      cooldownUntil = null;
+    }
+
+    const inCooldown = cooldownUntil && cooldownUntil > now;
 
     res.json({
       plan: sub.plan || 'free', active: premium, lifetimeFree: sub.lifetime_free || false,
@@ -1111,7 +1124,7 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
       dailyRemaining: inCooldown ? 0 : (premium ? -1 : (10 - dailyCount)),
       dailyUsed: dailyCount, dailyLimit: premium ? -1 : 10,
       username: user.username || '', status: user.status || 'active',
-      coolDownUntil: user.cooldown_until ? new Date(user.cooldown_until).getTime() : null,
+      coolDownUntil: cooldownUntil,
       serverTime: now,
     });
   } catch (e) { safeError(res, e, 'subscription-status'); }
@@ -1497,12 +1510,20 @@ app.get('/api/user/daily-usage', requireJwt, async (req, res) => {
     const premium = sub.active || sub.lifetime_free;
     const usage = await awFind('daily_usage', [Query.equal('user_id', req.userId), Query.equal('date', getTodayStr())]);
     const dailyCount = usage?.count || 0;
-    const inCooldown = user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now();
+
+    // Auto-clear stale cooldown from previous day if daily count has reset
+    let cooldownUntil = user.cooldown_until ? new Date(user.cooldown_until).getTime() : null;
+    if (cooldownUntil && dailyCount === 0) {
+      await awUpdate('users', req.userId, { cooldown_until: null });
+      cooldownUntil = null;
+    }
+
+    const inCooldown = cooldownUntil && cooldownUntil > Date.now();
     res.json({
       dailyRemaining: inCooldown ? 0 : (premium ? -1 : (10 - dailyCount)),
       dailyUsed: dailyCount, dailyLimit: premium ? -1 : 10,
       isPremium: premium, plan: sub.plan || 'free',
-      coolDownUntil: user.cooldown_until ? new Date(user.cooldown_until).getTime() : null,
+      coolDownUntil: cooldownUntil,
       serverTime: Date.now(),
     });
   } catch (e) { safeError(res, e, 'user-daily-usage'); }
