@@ -44,7 +44,7 @@ export default function Notifications() {
   useEffect(() => {
     refreshHistory();
     loadAiConfig();
-    const interval = setInterval(refreshHistory, 30000);
+    const interval = setInterval(refreshHistory, 60000);
     return () => clearInterval(interval);
   }, []);
 
