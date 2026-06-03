@@ -9,7 +9,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import twilio from 'twilio';
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
@@ -500,13 +500,36 @@ app.get('/api/users', requireAdmin, async (req, res) => {
 app.delete('/api/users/:identifier', requireAdmin, async (req, res) => {
   try {
     const { identifier } = req.params;
-    const user = await awGet('users', identifier);
+    const cleanId = sanitize(identifier);
+    let user = await awGet('users', cleanId);
+    if (!user) user = await awFind('users', [Query.equal('phone', cleanId)]);
+    if (!user) user = await awFind('users', [Query.equal('email', cleanId.toLowerCase().trim())]);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
+    const uid = user.id;
+
     if (user.fcm_token) {
-      await sendFcm(user.fcm_token, { title: 'Account Deleted', body: 'Your account has been permanently deleted.' }, { type: 'force_logout' });
+      try { await sendFcm(user.fcm_token, { title: 'Account Deleted', body: 'Your account has been permanently deleted.' }, { type: 'force_logout' }); } catch {}
     }
 
+    // Delete all user data
+    const deletes = [
+      awDelete('users', uid).catch(() => {}),
+      awDelete('user_subscriptions', uid).catch(() => {}),
+    ];
+    // Delete search history
+    const searches = await awFind('user_searches', [Query.equal('user_id', uid)]);
+    if (searches) deletes.push(...searches.map(s => awDelete('user_searches', s.id).catch(() => {})));
+    // Delete quiz attempts
+    const quizzes = await awFind('quiz_attempts', [Query.equal('user_id', uid)]);
+    if (quizzes) deletes.push(...quizzes.map(q => awDelete('quiz_attempts', q.id).catch(() => {})));
+    // Delete daily usage records
+    const usage = await awFind('daily_usage', [Query.equal('user_id', uid)]);
+    if (usage) deletes.push(...usage.map(d => awDelete('daily_usage', d.id).catch(() => {})));
+
+    await Promise.all(deletes);
+
+    console.log(`[ADMIN] User ${uid} (${user.phone}) permanently deleted by admin`);
     res.json({ success: true, message: 'User permanently deleted.' });
   } catch (e) { safeError(res, e, 'users-delete'); }
 });
@@ -876,15 +899,16 @@ app.post('/api/auth/exchange-token', async (req, res) => {
   } catch (e) { safeError(res, e, 'auth-exchange'); }
 });
 
-// Phone + password registration (legacy)
+// Phone/Email + password registration
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { phone, username, password, deviceName } = req.body;
+    const { phone, email, username, password, deviceName } = req.body;
     if (!phone || !username || !password) return res.status(400).json({ error: 'Phone, username, and password required' });
     if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
 
     const cleanPhone = sanitize(phone);
     const cleanUsername = sanitize(username);
+    const cleanEmail = email ? sanitize(email).toLowerCase().trim() : '';
 
     const existing = await awFind('users', [Query.equal('phone', cleanPhone)]);
     if (existing) {
@@ -892,10 +916,11 @@ app.post('/api/auth/register', async (req, res) => {
       await awUpdate('users', existing.id, {
         username: cleanUsername, password_hash: hashedPassword,
         device_name: sanitize(deviceName || ''), last_active: new Date().toISOString(),
+        ...(cleanEmail ? { email: cleanEmail } : {}),
       });
 
       const token = createToken(cleanPhone, existing.id);
-      return res.json({ success: true, phone: cleanPhone, username: cleanUsername, token, uid: existing.id });
+      return res.json({ success: true, phone: cleanPhone, email: cleanEmail, username: cleanUsername, token, uid: existing.id });
     }
 
     const uid = crypto.randomUUID();
@@ -903,7 +928,7 @@ app.post('/api/auth/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     await awCreate('users', uid, {
-      phone: cleanPhone, username: cleanUsername, password_hash: hashedPassword,
+      email: cleanEmail, phone: cleanPhone, username: cleanUsername, password_hash: hashedPassword,
       device_name: sanitize(deviceName || ''), status: 'active',
       created_at: now, last_active: now, app_version: req.body.appVersion || '2.0.0',
     });
@@ -914,18 +939,19 @@ app.post('/api/auth/register', async (req, res) => {
 
     const token = createToken(cleanPhone, uid);
     console.log(`[REGISTER] Created user ${uid} (${cleanPhone})`);
-    res.json({ success: true, phone: cleanPhone, username: cleanUsername, token, uid });
+    res.json({ success: true, phone: cleanPhone, email: cleanEmail, username: cleanUsername, token, uid });
   } catch (e) { console.error('[REGISTER] Error:', e?.message || e); res.status(500).json({ error: e?.message || 'Registration failed' }); }
 });
 
-// Legacy phone sign-in
+// Phone/Email sign-in (accepts phone or email as identifier)
 app.post('/api/auth/phone-signin', async (req, res) => {
   try {
     const { phone, password } = req.body;
-    if (!phone || !password) return res.status(400).json({ error: 'Phone and password required' });
+    if (!phone || !password) return res.status(400).json({ error: 'Phone/email and password required' });
 
-    const cleanPhone = sanitize(phone);
-    const user = await awFind('users', [Query.equal('phone', cleanPhone)]);
+    const cleanIdentifier = sanitize(phone).trim();
+    let user = await awFind('users', [Query.equal('phone', cleanIdentifier)]);
+    if (!user) user = await awFind('users', [Query.equal('email', cleanIdentifier.toLowerCase())]);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
     const valid = await bcrypt.compare(password, user.password_hash || '');
@@ -937,96 +963,86 @@ app.post('/api/auth/phone-signin', async (req, res) => {
   } catch (e) { safeError(res, e, 'phone-signin'); }
 });
 
-// ── Twilio OTP Forgot Password ────────────────────────────────────────
-const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
-const otpStore = new Map(); // phone → { otp, expiresAt }
+// ── Email OTP Forgot Password ──────────────────────────────────────────
+const OTP_EXPIRY_MS = 5 * 60 * 1000;
+const otpStore = new Map();
 
-function getTwilioClient() {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  if (!sid || !token) return null;
-  return twilio(sid, token);
+function getMailTransporter() {
+  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const port = parseInt(process.env.SMTP_PORT || '587');
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!user || !pass) return null;
+  return nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } });
 }
 
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Phone number required' });
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
 
-    const cleanPhone = sanitize(phone);
-    const user = await awFind('users', [Query.equal('phone', cleanPhone)]);
-    if (!user) return res.status(404).json({ error: 'No account found with this phone number' });
+    const cleanEmail = sanitize(email).toLowerCase().trim();
+    const user = await awFind('users', [Query.equal('email', cleanEmail)]);
+    if (!user) return res.status(404).json({ error: 'No account found with this email' });
 
-    // Generate 6-digit OTP
     const otp = String(Math.floor(100000 + Math.random() * 900000));
-    otpStore.set(cleanPhone, { otp, expiresAt: Date.now() + OTP_EXPIRY_MS });
+    otpStore.set(cleanEmail, { otp, expiresAt: Date.now() + OTP_EXPIRY_MS });
 
-    // Try Twilio; fallback to console for testing
-    const twilioClient = getTwilioClient();
-    if (twilioClient) {
-      const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
-      if (twilioPhone) {
-        await twilioClient.messages.create({
-          body: `WordsNest OTP: ${otp}. Valid for 5 minutes.`,
-          from: twilioPhone,
-          to: cleanPhone,
-        });
-        console.log(`[OTP] Sent to ${cleanPhone}: ${otp}`);
-      }
+    const mailer = getMailTransporter();
+    if (mailer) {
+      const from = process.env.SMTP_USER;
+      await mailer.sendMail({
+        from: `"WordsNest" <${from}>`,
+        to: cleanEmail,
+        subject: 'Password Reset OTP',
+        text: `Your WordsNest password reset code: ${otp}\n\nValid for 5 minutes.`,
+        html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#fffbf5;border-radius:20px;border:1px solid #e8ddd0"><div style="text-align:center;font-size:40px;margin-bottom:12px">🌱</div><h2 style="color:#2a170f;text-align:center">Password Reset</h2><p style="color:#6b5b4e;text-align:center;font-size:14px">Use this code to reset your WordsNest password:</p><div style="background:#f8f2ec;border-radius:12px;padding:16px;text-align:center;margin:16px 0;border:1px solid #e8ddd0"><span style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#2a170f">${otp}</span></div><p style="color:#bfa090;text-align:center;font-size:12px">Valid for 5 minutes. If you didn't request this, ignore this email.</p></div>`,
+      });
+      console.log(`[OTP] Emailed to ${cleanEmail}: ${otp}`);
     } else {
-      console.log(`[OTP] Twilio not configured. OTP for ${cleanPhone}: ${otp}`);
+      console.log(`[OTP] SMTP not configured. OTP for ${cleanEmail}: ${otp}`);
     }
 
-    res.json({ success: true, message: 'OTP sent to your phone' });
+    res.json({ success: true, message: 'OTP sent to your email' });
   } catch (e) { safeError(res, e, 'forgot-password'); }
 });
 
 app.post('/api/auth/verify-otp', async (req, res) => {
   try {
-    const { phone, otp } = req.body;
-    if (!phone || !otp) return res.status(400).json({ error: 'Phone and OTP required' });
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
 
-    const cleanPhone = sanitize(phone);
-    const stored = otpStore.get(cleanPhone);
-    if (!stored) return res.status(400).json({ error: 'No OTP requested. Please request a new code.' });
-    if (Date.now() > stored.expiresAt) {
-      otpStore.delete(cleanPhone);
-      return res.status(400).json({ error: 'OTP has expired. Please request a new code.' });
-    }
-    if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid verification code' });
+    const cleanKey = sanitize(email).toLowerCase().trim();
+    const stored = otpStore.get(cleanKey);
+    if (!stored) return res.status(400).json({ error: 'No OTP requested' });
+    if (Date.now() > stored.expiresAt) { otpStore.delete(cleanKey); return res.status(400).json({ error: 'OTP expired' }); }
+    if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid code' });
 
-    // OTP verified — generate a short-lived reset token
-    otpStore.delete(cleanPhone);
+    otpStore.delete(cleanKey);
     const resetToken = crypto.randomBytes(32).toString('hex');
-    otpStore.set(`reset_${cleanPhone}`, { resetToken, expiresAt: Date.now() + OTP_EXPIRY_MS });
-
+    otpStore.set(`reset_${cleanKey}`, { resetToken, expiresAt: Date.now() + OTP_EXPIRY_MS });
     res.json({ success: true, resetToken });
   } catch (e) { safeError(res, e, 'verify-otp'); }
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
   try {
-    const { phone, resetToken, newPassword } = req.body;
-    if (!phone || !resetToken || !newPassword) return res.status(400).json({ error: 'Phone, reset token, and new password required' });
+    const { email, resetToken, newPassword } = req.body;
+    if (!email || !resetToken || !newPassword) return res.status(400).json({ error: 'Email, reset token, and new password required' });
     if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
 
-    const cleanPhone = sanitize(phone);
-    const stored = otpStore.get(`reset_${cleanPhone}`);
-    if (!stored) return res.status(400).json({ error: 'No reset session. Please start again.' });
-    if (Date.now() > stored.expiresAt) {
-      otpStore.delete(`reset_${cleanPhone}`);
-      return res.status(400).json({ error: 'Reset session expired. Please start again.' });
-    }
-    if (stored.resetToken !== resetToken) return res.status(400).json({ error: 'Invalid reset token' });
+    const cleanKey = sanitize(email).toLowerCase().trim();
+    const stored = otpStore.get(`reset_${cleanKey}`);
+    if (!stored || stored.resetToken !== resetToken) return res.status(400).json({ error: 'Invalid reset session' });
+    if (Date.now() > stored.expiresAt) { otpStore.delete(`reset_${cleanKey}`); return res.status(400).json({ error: 'Reset session expired' }); }
 
-    const user = await awFind('users', [Query.equal('phone', cleanPhone)]);
+    const user = await awFind('users', [Query.equal('email', cleanKey)]);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await awUpdate('users', user.id, { password_hash: hashedPassword });
-    otpStore.delete(`reset_${cleanPhone}`);
-
-    console.log(`[RESET] Password reset for ${cleanPhone} (${user.id})`);
+    otpStore.delete(`reset_${cleanKey}`);
+    console.log(`[RESET] Password reset for ${cleanKey} (${user.id})`);
     res.json({ success: true, message: 'Password reset successfully' });
   } catch (e) { safeError(res, e, 'reset-password'); }
 });
