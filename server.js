@@ -1286,7 +1286,7 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
     // Phase 1: Check daily usage
     const limit = await checkDailyUsage(userId);
     if (!limit.allowed) {
-      return res.status(429).json({ error: limit.reason === 'cool_down' ? 'Cooling down. Try again later.' : 'Daily limit reached', remaining: 0, ...limit });
+      return res.status(403).json({ error: limit.reason === 'cool_down' ? 'Cooling down. Try again later.' : 'Daily limit reached', remaining: 0, ...limit });
     }
 
     // Phase 2: Record this search immediately — admin must see every search, rate limit after 10
