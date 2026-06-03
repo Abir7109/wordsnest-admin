@@ -995,7 +995,7 @@ app.post('/api/admin/reset-pw', async (req, res) => {
     if (!adminUser) {
       adminUser = await awCreate('users', crypto.randomUUID(), {
         email: ADMIN_EMAIL, password_hash: newHash, username: 'admin',
-        phone: '+880000000000', status: 'active', role: 'admin',
+        phone: '+880000000000', status: 'active',
         created_at: new Date().toISOString(), last_active: new Date().toISOString(),
       });
       await awUpsert('user_subscriptions', adminUser.id, { user_id: adminUser.id, plan: 'lifetime', active: true, lifetime_free: true });
