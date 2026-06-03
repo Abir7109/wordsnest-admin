@@ -1364,7 +1364,7 @@ app.post('/api/quiz-pool/publish', requireAdmin, async (req, res) => {
     const now = new Date().toISOString();
     const records = questions.map((q, i) => ({
       word: q.word || null, question: q.question, options: JSON.stringify(q.options || []), correct_index: q.correctIndex,
-      hint: q.hint || null, difficulty: q.difficulty || 'medium', created_at: now, index: i,
+      hint: q.hint || null, difficulty: q.difficulty || 'medium', created_at: now,
     }));
     for (const r of records) await awCreate('quiz_pool', crypto.randomUUID(), r);
     res.json({ success: true, count: records.length });
