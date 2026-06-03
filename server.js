@@ -637,7 +637,7 @@ app.get('/api/words/stats', async (req, res) => {
       uniqueWords = Object.keys(freq).length;
       topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
     } catch {}
-    res.json({ total, today: todayC, thisWeek: weekC, uniqueWords, typeDistribution: Object.entries(typeDist).map(([type, count]) => ({ type, count })), topWords });
+    res.json({ total, today: todayC, thisWeek: weekC, uniqueWords, typeDistribution: Object.entries(typeDist).map(([type, count]) => ({ type, count, percentage: Math.round((count / (Object.values(typeDist).reduce((a, b) => a + b, 0) || 1)) * 100) })), topWords });
   } catch (e) { safeError(res, e, 'words-stats'); }
 });
 
