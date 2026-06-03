@@ -43,7 +43,7 @@ export default function Searches() {
       }).catch(() => setLoading(false));
     };
     load();
-    const interval = setInterval(load, 7000);
+    const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
   }, []);
 

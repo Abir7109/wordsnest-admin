@@ -69,7 +69,7 @@ export default function Quizzes() {
     };
     load();
     loadPoolStatus();
-    const interval = setInterval(load, 7000);
+    const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
   }, []);
 
