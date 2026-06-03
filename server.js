@@ -62,8 +62,8 @@ const adminLimiter = rateLimit({
 app.use('/api/admin/', adminLimiter);
 
 function safeError(res, e, context = '') {
-  console.error(`[ERROR] ${context}:`, e?.message || e, e?.code || '', e?.type || '');
-  res.status(500).json({ error: 'Internal server error', _debug: `${context}: ${e?.message || e}` });
+  console.error(`[ERROR] ${context}:`, e);
+  res.status(500).json({ error: 'Internal server error' });
 }
 const APPWRITE_ENDPOINT = process.env.APPWRITE_ENDPOINT || 'https://sgp.cloud.appwrite.io/v1';
 const APPWRITE_PROJECT_ID = process.env.APPWRITE_PROJECT_ID;
@@ -984,27 +984,6 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
       serverTime: Date.now(),
     });
   } catch (e) { safeError(res, e, 'subscription-status'); }
-});
-
-// TEMP: reset admin password
-app.post('/api/admin/reset-pw', async (req, res) => {
-  try {
-    const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
-    let adminUser = await awFind('users', [Query.equal('email', ADMIN_EMAIL)]);
-    const newHash = await bcrypt.hash('ABIRBD@#12', 10);
-    if (!adminUser) {
-      adminUser = await awCreate('users', crypto.randomUUID(), {
-        email: ADMIN_EMAIL, password_hash: newHash, username: 'admin',
-        phone: '+880000000000', status: 'active',
-        created_at: new Date().toISOString(), last_active: new Date().toISOString(),
-      });
-      await awUpsert('user_subscriptions', adminUser.id, { user_id: adminUser.id, plan: 'lifetime', active: true, lifetime_free: true });
-      res.json({ success: true, message: 'Admin created. Password: ABIRBD@#12' });
-    } else {
-      await awUpdate('users', adminUser.id, { password_hash: newHash });
-      res.json({ success: true, message: 'Password reset to ABIRBD@#12' });
-    }
-  } catch (e) { safeError(res, e, 'admin-reset-pw'); }
 });
 
 app.post('/api/admin/login', async (req, res) => {
