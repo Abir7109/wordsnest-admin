@@ -9,6 +9,7 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import twilio from 'twilio';
 
 dotenv.config();
 
@@ -934,6 +935,100 @@ app.post('/api/auth/phone-signin', async (req, res) => {
     const token = createToken(cleanPhone, user.id);
     res.json({ success: true, token, username: user.username, uid: user.id });
   } catch (e) { safeError(res, e, 'phone-signin'); }
+});
+
+// ── Twilio OTP Forgot Password ────────────────────────────────────────
+const OTP_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+const otpStore = new Map(); // phone → { otp, expiresAt }
+
+function getTwilioClient() {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !token) return null;
+  return twilio(sid, token);
+}
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone number required' });
+
+    const cleanPhone = sanitize(phone);
+    const user = await awFind('users', [Query.equal('phone', cleanPhone)]);
+    if (!user) return res.status(404).json({ error: 'No account found with this phone number' });
+
+    // Generate 6-digit OTP
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    otpStore.set(cleanPhone, { otp, expiresAt: Date.now() + OTP_EXPIRY_MS });
+
+    // Try Twilio; fallback to console for testing
+    const twilioClient = getTwilioClient();
+    if (twilioClient) {
+      const twilioPhone = process.env.TWILIO_PHONE_NUMBER;
+      if (twilioPhone) {
+        await twilioClient.messages.create({
+          body: `WordsNest OTP: ${otp}. Valid for 5 minutes.`,
+          from: twilioPhone,
+          to: cleanPhone,
+        });
+        console.log(`[OTP] Sent to ${cleanPhone}: ${otp}`);
+      }
+    } else {
+      console.log(`[OTP] Twilio not configured. OTP for ${cleanPhone}: ${otp}`);
+    }
+
+    res.json({ success: true, message: 'OTP sent to your phone' });
+  } catch (e) { safeError(res, e, 'forgot-password'); }
+});
+
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { phone, otp } = req.body;
+    if (!phone || !otp) return res.status(400).json({ error: 'Phone and OTP required' });
+
+    const cleanPhone = sanitize(phone);
+    const stored = otpStore.get(cleanPhone);
+    if (!stored) return res.status(400).json({ error: 'No OTP requested. Please request a new code.' });
+    if (Date.now() > stored.expiresAt) {
+      otpStore.delete(cleanPhone);
+      return res.status(400).json({ error: 'OTP has expired. Please request a new code.' });
+    }
+    if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid verification code' });
+
+    // OTP verified — generate a short-lived reset token
+    otpStore.delete(cleanPhone);
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    otpStore.set(`reset_${cleanPhone}`, { resetToken, expiresAt: Date.now() + OTP_EXPIRY_MS });
+
+    res.json({ success: true, resetToken });
+  } catch (e) { safeError(res, e, 'verify-otp'); }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { phone, resetToken, newPassword } = req.body;
+    if (!phone || !resetToken || !newPassword) return res.status(400).json({ error: 'Phone, reset token, and new password required' });
+    if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+
+    const cleanPhone = sanitize(phone);
+    const stored = otpStore.get(`reset_${cleanPhone}`);
+    if (!stored) return res.status(400).json({ error: 'No reset session. Please start again.' });
+    if (Date.now() > stored.expiresAt) {
+      otpStore.delete(`reset_${cleanPhone}`);
+      return res.status(400).json({ error: 'Reset session expired. Please start again.' });
+    }
+    if (stored.resetToken !== resetToken) return res.status(400).json({ error: 'Invalid reset token' });
+
+    const user = await awFind('users', [Query.equal('phone', cleanPhone)]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await awUpdate('users', user.id, { password_hash: hashedPassword });
+    otpStore.delete(`reset_${cleanPhone}`);
+
+    console.log(`[RESET] Password reset for ${cleanPhone} (${user.id})`);
+    res.json({ success: true, message: 'Password reset successfully' });
+  } catch (e) { safeError(res, e, 'reset-password'); }
 });
 
 // ── Subscription ─────────────────────────────────────────────────────
