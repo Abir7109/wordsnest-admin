@@ -8,7 +8,7 @@ interface LoginPageProps {
 }
 
 export default function LoginPage({ onLogin }: LoginPageProps) {
-  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
@@ -16,22 +16,24 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) return;
+    if (!phone || !password) return;
     setLoading(true);
     setError('');
     try {
       const res = await apiFetch(`${window.location.origin}/api/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ phone, password }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         setError(data.error || 'Login failed');
         return;
       }
+      // Ensure token is defined
+      if (!data.token) { setError('No token received'); return; }
       onLogin(data.token);
-    } catch {
+    } catch (e) {
       setError('Connection error. Is the server running?');
     } finally {
       setLoading(false);
@@ -57,12 +59,12 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         <div className="bg-[#FFFBF5] rounded-2xl border border-[#E8DDD0] p-8 shadow-xl">
           <form onSubmit={handleSubmit} className="flex flex-col gap-5">
             <div>
-              <label className="block text-sm font-medium text-[#2A170F] mb-1.5">Email</label>
+              <label className="block text-sm font-medium text-[#2A170F] mb-1.5">Phone Number</label>
               <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="admin@example.com"
+                type="tel"
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                placeholder="+880000000000"
                 className="w-full px-4 py-2.5 rounded-xl border border-[#E8DDD0] bg-white text-[#2A170F] placeholder-[#B8A99A] outline-none focus:border-[#D48A4A] focus:ring-2 focus:ring-[#D48A4A]/20 transition-all"
                 autoFocus
               />

@@ -988,20 +988,21 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
 
 app.post('/api/admin/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+    const { phone, password } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: 'Phone and password required' });
 
-    const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
-    if (email !== ADMIN_EMAIL) return res.status(403).json({ error: 'Not authorized as admin' });
+    const ADMIN_PHONE = '+880000000000';
+    const cleanPhone = sanitize(phone);
+    if (cleanPhone !== ADMIN_PHONE) return res.status(403).json({ error: 'Not authorized as admin' });
 
-    const adminUser = await awFind('users', [Query.equal('email', email)]);
+    const adminUser = await awFind('users', [Query.equal('phone', cleanPhone)]);
     if (!adminUser) return res.status(401).json({ error: 'Invalid credentials' });
 
     const valid = await bcrypt.compare(password, adminUser.password_hash || '');
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
-    const token = jwt.sign({ role: 'admin', uid: adminUser.id, email: adminUser.email }, JWT_SECRET, { expiresIn: '24h' });
-    res.json({ success: true, token, user: { id: adminUser.id, email: adminUser.email } });
+    const token = jwt.sign({ role: 'admin', uid: adminUser.id, phone: adminUser.phone }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ success: true, token, user: { id: adminUser.id, phone: adminUser.phone } });
   } catch (e) { safeError(res, e, 'admin-login'); }
 });
 
