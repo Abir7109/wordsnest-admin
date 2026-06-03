@@ -313,17 +313,20 @@ async function checkDailyUsage(userId) {
   const premium = isPremium(user);
   if (premium) return { allowed: true, remaining: -1, isPremium: true, count: 0 };
 
-  const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
-  const count = usage?.count || 0;
-
-  // Auto-clear stale cooldown from previous day if daily count has reset
-  if (user.cooldown_until && count === 0) {
+  // Check for active cooldown FIRST (admin-set or system-set)
+  if (user.cooldown_until) {
+    const cooldownTime = new Date(user.cooldown_until).getTime();
+    if (cooldownTime > Date.now()) {
+      return { allowed: false, remaining: 0, reason: 'cool_down', coolDownUntil: cooldownTime };
+    }
+    // Cooldown has expired — clean it up
     await awUpdate('users', userId, { cooldown_until: null });
   }
 
+  const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
+  const count = usage?.count || 0;
+
   if (count >= 10) {
-    const cooldownUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await awUpdate('users', userId, { cooldown_until: cooldownUntil });
     await awUpdate('users', userId, { rate_limit_hits: (user.rate_limit_hits || 0) + 1 });
     return { allowed: false, remaining: 0, reason: 'limit_reached' };
   }
@@ -1109,14 +1112,14 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
     const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', getTodayStr())]);
     const dailyCount = usage?.count || 0;
 
-    // Auto-clear stale cooldown from previous day if daily count has reset
+    // Check cooldown — auto-clear if expired
     let cooldownUntil = user.cooldown_until ? new Date(user.cooldown_until).getTime() : null;
-    if (cooldownUntil && dailyCount === 0) {
+    if (cooldownUntil && cooldownUntil <= now) {
       await awUpdate('users', userId, { cooldown_until: null });
       cooldownUntil = null;
     }
 
-    const inCooldown = cooldownUntil && cooldownUntil > now;
+    const inCooldown = cooldownUntil !== null;
 
     res.json({
       plan: sub.plan || 'free', active: premium, lifetimeFree: sub.lifetime_free || false,
@@ -1299,20 +1302,15 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
     // Phase 1: Check daily usage
     const limit = await checkDailyUsage(userId);
     if (!limit.allowed) {
-      return res.status(403).json({ error: limit.reason === 'cool_down' ? 'Cooling down. Try again later.' : 'Daily limit reached', remaining: 0, ...limit });
+      return res.status(403).json({
+        error: limit.reason === 'cool_down' ? 'cool_down' : 'Daily limit reached',
+        remaining: 0,
+        cool_down: limit.reason === 'cool_down',
+        reason: limit.reason,
+      });
     }
 
-    // Phase 2: Record this search immediately — admin must see every search, rate limit after 10
-    if (!limit.isPremium) {
-      await incrementDailyUsage(userId);
-    }
-    const userDoc = await awGet('users', userId).catch(() => null);
-    const uname = userDoc?.username || req.userPhone || 'unknown';
-    const wordLower = word.toLowerCase();
-    await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() });
-    await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() });
-
-    // Phase 3: Call AI
+    // Phase 2: Call AI (don't increment usage or record search yet)
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
@@ -1359,16 +1357,25 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
       } catch {}
     }
 
-    // Post-increment remaining — daily_usage was incremented after checkDailyUsage, so subtract 1
-    const postRemaining = limit.isPremium ? -1 : Math.max(0, limit.remaining - 1);
-
     if (!aiResult) {
+      // Don't increment daily usage — AI failed, so user shouldn't be charged
       return res.status(502).json({
-        error: 'AI analysis failed',
-        remaining: postRemaining,
+        error: 'AI analysis failed. Please try again.',
+        remaining: limit.remaining,
         isPremium: limit.isPremium || false,
       });
     }
+
+    // Phase 3: AI succeeded — now record the search and usage
+    if (!limit.isPremium) {
+      await incrementDailyUsage(userId);
+    }
+    const postRemaining = limit.isPremium ? -1 : Math.max(0, limit.remaining - 1);
+    const userDoc = await awGet('users', userId).catch(() => null);
+    const uname = userDoc?.username || req.userPhone || 'unknown';
+    const wordLower = word.toLowerCase();
+    await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }).catch(() => {});
+    await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }).catch(() => {});
 
     // Phase 4: Gate premium fields for free users
     if (!limit.isPremium) {
@@ -1511,14 +1518,14 @@ app.get('/api/user/daily-usage', requireJwt, async (req, res) => {
     const usage = await awFind('daily_usage', [Query.equal('user_id', req.userId), Query.equal('date', getTodayStr())]);
     const dailyCount = usage?.count || 0;
 
-    // Auto-clear stale cooldown from previous day if daily count has reset
+    // Check cooldown — auto-clear if expired
     let cooldownUntil = user.cooldown_until ? new Date(user.cooldown_until).getTime() : null;
-    if (cooldownUntil && dailyCount === 0) {
+    if (cooldownUntil && cooldownUntil <= Date.now()) {
       await awUpdate('users', req.userId, { cooldown_until: null });
       cooldownUntil = null;
     }
 
-    const inCooldown = cooldownUntil && cooldownUntil > Date.now();
+    const inCooldown = cooldownUntil !== null;
     res.json({
       dailyRemaining: inCooldown ? 0 : (premium ? -1 : (10 - dailyCount)),
       dailyUsed: dailyCount, dailyLimit: premium ? -1 : 10,
