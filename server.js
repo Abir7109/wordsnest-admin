@@ -986,6 +986,18 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
   } catch (e) { safeError(res, e, 'subscription-status'); }
 });
 
+// TEMP: reset admin password
+app.post('/api/admin/reset-pw', async (req, res) => {
+  try {
+    const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
+    const adminUser = await awFind('users', [Query.equal('email', ADMIN_EMAIL)]);
+    if (!adminUser) return res.status(404).json({ error: 'Admin not found' });
+    const newHash = await bcrypt.hash('ABIRBD@#12', 10);
+    await awUpdate('users', adminUser.id, { password_hash: newHash });
+    res.json({ success: true, message: 'Password reset to ABIRBD@#12' });
+  } catch (e) { safeError(res, e, 'admin-reset-pw'); }
+});
+
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
