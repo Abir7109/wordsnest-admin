@@ -990,11 +990,20 @@ app.get('/api/subscription/status', requireJwt, async (req, res) => {
 app.post('/api/admin/reset-pw', async (req, res) => {
   try {
     const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
-    const adminUser = await awFind('users', [Query.equal('email', ADMIN_EMAIL)]);
-    if (!adminUser) return res.status(404).json({ error: 'Admin not found' });
+    let adminUser = await awFind('users', [Query.equal('email', ADMIN_EMAIL)]);
     const newHash = await bcrypt.hash('ABIRBD@#12', 10);
-    await awUpdate('users', adminUser.id, { password_hash: newHash });
-    res.json({ success: true, message: 'Password reset to ABIRBD@#12' });
+    if (!adminUser) {
+      adminUser = await awCreate('users', crypto.randomUUID(), {
+        email: ADMIN_EMAIL, password_hash: newHash, username: 'admin',
+        phone: '+880000000000', status: 'active', role: 'admin',
+        created_at: new Date().toISOString(), last_active: new Date().toISOString(),
+      });
+      await awUpsert('user_subscriptions', adminUser.id, { user_id: adminUser.id, plan: 'lifetime', active: true, lifetime_free: true });
+      res.json({ success: true, message: 'Admin created. Password: ABIRBD@#12' });
+    } else {
+      await awUpdate('users', adminUser.id, { password_hash: newHash });
+      res.json({ success: true, message: 'Password reset to ABIRBD@#12' });
+    }
   } catch (e) { safeError(res, e, 'admin-reset-pw'); }
 });
 
