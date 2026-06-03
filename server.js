@@ -62,8 +62,8 @@ const adminLimiter = rateLimit({
 app.use('/api/admin/', adminLimiter);
 
 function safeError(res, e, context = '') {
-  console.error(`[ERROR] ${context}:`, e?.message || e, e?.code || '', e?.type || '');
-  res.status(500).json({ error: 'Internal server error', _debug: `${context}: ${e?.message || e}` });
+  console.error(`[ERROR] ${context}:`, e);
+  res.status(500).json({ error: 'Internal server error' });
 }
 const APPWRITE_ENDPOINT = process.env.APPWRITE_ENDPOINT || 'https://sgp.cloud.appwrite.io/v1';
 const APPWRITE_PROJECT_ID = process.env.APPWRITE_PROJECT_ID;
