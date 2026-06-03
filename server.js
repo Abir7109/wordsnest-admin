@@ -300,13 +300,13 @@ async function awGetUser(id) {
   return awGet('users', id);
 }
 
-async function checkAndUpdateDailyUsage(userId) {
+async function checkDailyUsage(userId) {
   const today = getTodayStr();
   const user = await awGet('users', userId);
   if (!user) return { allowed: false, remaining: 0, reason: 'User not found' };
 
   const sub = await awFind('user_subscriptions', [Query.equal('user_id', userId)]);
-  if (sub && (sub.active || sub.lifetime_free)) return { allowed: true, remaining: -1, isPremium: true };
+  if (sub && (sub.active || sub.lifetime_free)) return { allowed: true, remaining: -1, isPremium: true, count: 0 };
 
   if (user.cooldown_until && new Date(user.cooldown_until).getTime() > Date.now()) {
     return { allowed: false, remaining: 0, reason: 'cool_down' };
@@ -322,14 +322,20 @@ async function checkAndUpdateDailyUsage(userId) {
     return { allowed: false, remaining: 0, reason: 'limit_reached' };
   }
 
+  return { allowed: true, remaining: 9 - count, isPremium: false, count: count };
+}
+
+async function incrementDailyUsage(userId) {
+  const today = getTodayStr();
+  const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
+  const count = usage?.count || 0;
+
   if (usage) {
     await awUpdate('daily_usage', usage.id, { count: count + 1 });
   } else {
     await awCreate('daily_usage', crypto.randomUUID(), { user_id: userId, date: today, count: 1 });
   }
   await awUpdate('users', userId, { last_active: new Date().toISOString() });
-
-  return { allowed: true, remaining: 9 - count, isPremium: false };
 }
 
 // ── Health ───────────────────────────────────────────────────────────
@@ -1278,13 +1284,14 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
     if (!word) return res.status(400).json({ error: 'Word required' });
 
     const userId = req.userId;
-    const limit = await checkAndUpdateDailyUsage(userId);
+
+    // Phase 1: Check daily usage (DO NOT increment yet — only increment after AI succeeds)
+    const limit = await checkDailyUsage(userId);
     if (!limit.allowed) {
       return res.status(429).json({ error: limit.reason === 'cool_down' ? 'Cooling down. Try again later.' : 'Daily limit reached', remaining: 0, ...limit });
     }
 
     // Call Groq/Gemini AI (same logic as before - uses AI provider from config)
-    // [AI processing code remains unchanged - external API calls not affected by migration]
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
@@ -1333,7 +1340,8 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
 
     if (!aiResult) return res.status(502).json({ error: 'AI analysis failed' });
 
-    // Log search event with username
+    // Phase 2: AI succeeded — now increment daily usage and log the search
+    await incrementDailyUsage(userId);
     const userDoc = await awGet('users', userId).catch(() => null);
     const uname = userDoc?.username || req.userPhone || 'unknown';
     await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word, timestamp: new Date().toISOString() });
