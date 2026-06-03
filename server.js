@@ -326,19 +326,6 @@ async function checkDailyUsage(userId) {
   return { allowed: true, remaining: 10 - count, isPremium: false, count: count };
 }
 
-  const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
-  const count = usage?.count || 0;
-
-  if (count >= 10) {
-    const cooldownUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    await awUpdate('users', userId, { cooldown_until: cooldownUntil });
-    await awUpdate('users', userId, { rate_limit_hits: (user.rate_limit_hits || 0) + 1 });
-    return { allowed: false, remaining: 0, reason: 'limit_reached' };
-  }
-
-  return { allowed: true, remaining: 10 - count, isPremium: false, count: count };
-}
-
 async function incrementDailyUsage(userId) {
   const today = getTodayStr();
   const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
