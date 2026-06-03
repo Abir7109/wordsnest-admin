@@ -264,7 +264,7 @@ async function awList(coll, queries = []) {
 
 async function awCount(coll, queries = []) {
   try {
-    const res = await db.listDocuments(DB_ID, coll, [...queries, Query.limit(0)]);
+    const res = await db.listDocuments(DB_ID, coll, [...queries, Query.limit(1)]);
     return res.total;
   } catch { return 0; }
 }
