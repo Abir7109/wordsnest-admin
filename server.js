@@ -1362,12 +1362,20 @@ app.post('/api/quiz-pool/publish', requireAdmin, async (req, res) => {
     const allPool = await awList('quiz_pool');
     for (const q of allPool) await awDelete('quiz_pool', q.id);
     const now = new Date().toISOString();
-    const records = questions.map((q, i) => ({
-      word: q.word || null, question: q.question, options: JSON.stringify(q.options || []), correct_index: q.correctIndex,
-      hint: q.hint || null, difficulty: q.difficulty || 'medium', created_at: now,
-    }));
-    for (const r of records) await awCreate('quiz_pool', crypto.randomUUID(), r);
-    res.json({ success: true, count: records.length });
+    let created = 0;
+    for (const q of questions) {
+      try {
+        await awCreate('quiz_pool', crypto.randomUUID(), {
+          word: q.word || '', question: q.question || '', options: JSON.stringify(q.options || []),
+          correct_index: q.correctIndex ?? 0, hint: q.hint || '', difficulty: q.difficulty || 'medium',
+          created_at: now,
+        });
+        created++;
+      } catch (e) {
+        console.error('[quiz-pool-publish] Failed to create question:', e?.message || e);
+      }
+    }
+    res.json({ success: true, count: created });
   } catch (e) { safeError(res, e, 'quiz-pool-publish'); }
 });
 
