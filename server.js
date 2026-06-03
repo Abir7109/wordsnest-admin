@@ -250,16 +250,21 @@ async function awFind(coll, queries = []) {
 
 async function awList(coll, queries = []) {
   try {
+    // Extract any caller-specified limit from queries
+    const limitIdx = queries.findIndex(q => q.startsWith('limit('));
+    const callerLimit = limitIdx >= 0 ? parseInt(queries.splice(limitIdx, 1)[0].replace(/^limit\((\d+)\)$/, '$1')) : 0;
+    const pageSize = callerLimit > 0 ? Math.min(callerLimit, 100) : 100;
+    const maxDocs = callerLimit > 0 ? callerLimit : Infinity;
+
     let allDocs = [];
     let offset = 0;
-    const limit = 100;
-    while (true) {
-      const res = await db.listDocuments(DB_ID, coll, [...queries, Query.limit(limit), Query.offset(offset)]);
+    while (allDocs.length < maxDocs) {
+      const res = await db.listDocuments(DB_ID, coll, [...queries, Query.limit(pageSize), Query.offset(offset)]);
       allDocs = allDocs.concat(res.documents);
-      if (res.documents.length < limit) break;
-      offset += limit;
+      if (res.documents.length < pageSize) break;
+      offset += pageSize;
     }
-    return cleanDocs(allDocs);
+    return cleanDocs(allDocs.slice(0, maxDocs === Infinity ? allDocs.length : maxDocs));
   } catch { return []; }
 }
 
@@ -375,12 +380,11 @@ app.get('/api/dashboard', requireAdmin, async (req, res) => {
     const engagementRate = users > 0 ? Math.round((activeUsers / users) * 100) : 0;
     const retentionRate = usersBeforeWeek > 0 ? Math.round((retained / usersBeforeWeek) * 100) : 0;
 
-    const [wordsTodayCount, quizzesTodayCount, savedTypesData, savedWordsData, searchWordsData, quizScoresData] = await Promise.all([
+    const [wordsTodayCount, quizzesTodayCount, savedTypesData, savedWordsData, quizScoresData] = await Promise.all([
       awCount('saved_words', [Query.greaterThan('timestamp', todayStart)]).catch(() => 0),
       awCount('quiz_attempts', [Query.greaterThan('timestamp', todayStart)]).catch(() => 0),
       awList('saved_words', [Query.limit(2000)]),
       awList('saved_words', [Query.limit(2000)]),
-      awList('search_events', [Query.greaterThan('timestamp', weekAgoIso), Query.limit(50000)]),
       awList('quiz_attempts', [Query.limit(1000)]),
     ]);
 
@@ -450,8 +454,7 @@ app.get('/api/dashboard/top-words', requireAdmin, async (req, res) => {
 });
 app.get('/api/dashboard/top-searches', requireAdmin, async (req, res) => {
   try {
-    const weekAgo = new Date(getDaysAgo(7)).toISOString();
-    const data = await awList('search_events', [Query.greaterThan('timestamp', weekAgo), Query.limit(50000)]);
+    const data = await awList('search_events', [Query.orderDesc('timestamp'), Query.limit(50000)]);
     const freq = {};
     for (const s of data || []) { const w = s.word?.toLowerCase(); if (w) freq[w] = (freq[w] || 0) + 1; }
     const topSearches = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 10);
@@ -523,15 +526,17 @@ app.delete('/api/users/:identifier', requireAdmin, async (req, res) => {
       awDelete('users', uid).catch(() => {}),
       awDelete('user_subscriptions', uid).catch(() => {}),
     ];
-    // Delete search history
-    const searches = await awFind('user_searches', [Query.equal('user_id', uid)]);
-    if (searches) deletes.push(...searches.map(s => awDelete('user_searches', s.id).catch(() => {})));
+    // Delete search history (both collections)
+    for (const coll of ['search_events', 'search_history']) {
+      const docs = await awList(coll, [Query.equal('user_id', uid), Query.limit(50000)]);
+      for (const d of docs || []) deletes.push(awDelete(coll, d.id).catch(() => {}));
+    }
     // Delete quiz attempts
-    const quizzes = await awFind('quiz_attempts', [Query.equal('user_id', uid)]);
-    if (quizzes) deletes.push(...quizzes.map(q => awDelete('quiz_attempts', q.id).catch(() => {})));
+    const quizzes = await awList('quiz_attempts', [Query.equal('user_id', uid), Query.limit(50000)]);
+    for (const q of quizzes || []) deletes.push(awDelete('quiz_attempts', q.id).catch(() => {}));
     // Delete daily usage records
-    const usage = await awFind('daily_usage', [Query.equal('user_id', uid)]);
-    if (usage) deletes.push(...usage.map(d => awDelete('daily_usage', d.id).catch(() => {})));
+    const usage = await awList('daily_usage', [Query.equal('user_id', uid), Query.limit(50000)]);
+    for (const d of usage || []) deletes.push(awDelete('daily_usage', d.id).catch(() => {}));
 
     await Promise.all(deletes);
 
@@ -660,7 +665,7 @@ app.get('/api/searches/stats', requireAdmin, async (req, res) => {
     const weekC = await awCount('search_events', [Query.greaterThan('timestamp', weekAgo)]);
     let topWords = [];
     try {
-      const data = await awList('search_events', [Query.greaterThan('timestamp', weekAgo), Query.limit(50000)]);
+      const data = await awList('search_events', [Query.limit(50000)]);
       const freq = {};
       for (const s of data || []) { const w = s.word?.toLowerCase(); if (w) freq[w] = (freq[w] || 0) + 1; }
       topWords = Object.entries(freq).map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count).slice(0, 20);
