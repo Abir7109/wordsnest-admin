@@ -349,14 +349,9 @@ app.get('/api/server-time', (req, res) => res.json({ serverTime: Date.now() }));
 app.get('/api/ping-keep-alive', (req, res) => res.json({ pong: Date.now() }));
 
 // ── Dashboard ────────────────────────────────────────────────────────
-const dashCache = { data: null, ts: 0, TTL: 120000 };
 
 app.get('/api/dashboard', requireAdmin, async (req, res) => {
   try {
-    if (dashCache.data && Date.now() - dashCache.ts < dashCache.TTL) {
-      return res.json(dashCache.data);
-    }
-
     const dayAgo = new Date(Date.now() - 86400000).toISOString();
     const todayStart = new Date(getDayStart()).toISOString();
     const weekAgoIso = new Date(getDaysAgo(7)).toISOString();
@@ -406,8 +401,6 @@ app.get('/api/dashboard', requireAdmin, async (req, res) => {
       engagementRate, retentionRate,
     };
 
-    dashCache.data = payload;
-    dashCache.ts = Date.now();
     res.json(payload);
   } catch (e) { safeError(res, e, 'dashboard'); }
 });
