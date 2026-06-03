@@ -62,8 +62,8 @@ const adminLimiter = rateLimit({
 app.use('/api/admin/', adminLimiter);
 
 function safeError(res, e, context = '') {
-  console.error(`[ERROR] ${context}:`, e);
-  res.status(500).json({ error: 'Internal server error' });
+  console.error(`[ERROR] ${context}:`, e?.message || e, e?.code || '', e?.type || '');
+  res.status(500).json({ error: 'Internal server error', _debug: `${context}: ${e?.message || e}` });
 }
 const APPWRITE_ENDPOINT = process.env.APPWRITE_ENDPOINT || 'https://sgp.cloud.appwrite.io/v1';
 const APPWRITE_PROJECT_ID = process.env.APPWRITE_PROJECT_ID;
@@ -1363,7 +1363,7 @@ app.post('/api/quiz-pool/publish', requireAdmin, async (req, res) => {
     for (const q of allPool) await awDelete('quiz_pool', q.id);
     const now = new Date().toISOString();
     const records = questions.map((q, i) => ({
-      word: q.word || null, question: q.question, options: q.options, correct_index: q.correctIndex,
+      word: q.word || null, question: q.question, options: JSON.stringify(q.options || []), correct_index: q.correctIndex,
       hint: q.hint || null, difficulty: q.difficulty || 'medium', created_at: now, index: i,
     }));
     for (const r of records) await awCreate('quiz_pool', crypto.randomUUID(), r);
@@ -1374,7 +1374,11 @@ app.post('/api/quiz-pool/publish', requireAdmin, async (req, res) => {
 app.get('/api/quiz-pool', async (req, res) => {
   try {
     const data = await awList('quiz_pool', [Query.orderDesc('created_at'), Query.limit(10)]);
-    res.json({ questions: data || [] });
+    const questions = (data || []).map(q => ({
+      ...q,
+      options: typeof q.options === 'string' ? JSON.parse(q.options) : (q.options || []),
+    }));
+    res.json({ questions });
   } catch (e) { safeError(res, e, 'quiz-pool'); }
 });
 
@@ -1396,7 +1400,7 @@ app.get('/api/ai-notification-agent', requireAdmin, async (req, res) => {
 
 app.post('/api/ai-notification-agent', requireAdmin, async (req, res) => {
   try {
-    await awUpdate('ai_notification_agent', '1', {
+    await awUpsert('ai_notification_agent', '1', {
       prompt: req.body.prompt, enabled: req.body.enabled, interval_minutes: req.body.intervalMinutes,
       time_of_day: req.body.timeOfDay, updated_at: new Date().toISOString(),
       last_sent_at: req.body.lastSentAt, next_send_at: req.body.nextSendAt,
