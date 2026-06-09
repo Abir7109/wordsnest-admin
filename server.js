@@ -1325,17 +1325,7 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
       });
     }
 
-    // Phase 2: Record this search immediately — admin must see every search, rate limit after 10
-    if (!limit.isPremium) {
-      await incrementDailyUsage(userId);
-    }
-    const userDoc = await awGet('users', userId).catch(() => null);
-    const uname = userDoc?.username || req.userPhone || 'unknown';
-    const wordLower = word.toLowerCase();
-    try { await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }); } catch {}
-    try { await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }); } catch {}
-
-    // Phase 3: Call AI
+    // Phase 2: Call AI
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
