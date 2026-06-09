@@ -276,11 +276,15 @@ async function awCount(coll, queries = []) {
 }
 
 async function awCreate(coll, id, data) {
-  return cleanDoc(await db.createDocument(DB_ID, coll, id, data));
+  try {
+    return cleanDoc(await db.createDocument(DB_ID, coll, id, data));
+  } catch { return null; }
 }
 
 async function awUpdate(coll, id, data) {
-  return cleanDoc(await db.updateDocument(DB_ID, coll, id, data));
+  try {
+    return cleanDoc(await db.updateDocument(DB_ID, coll, id, data));
+  } catch { return null; }
 }
 
 async function awDelete(coll, id) {
@@ -1138,18 +1142,29 @@ app.post('/api/admin/login', async (req, res) => {
     const { phone, password } = req.body;
     if (!phone || !password) return res.status(400).json({ error: 'Phone and password required' });
 
+    // Admin 1: phone-based (+880000000000) via Appwrite
     const ADMIN_PHONE = '+880000000000';
     const cleanPhone = sanitize(phone);
-    if (cleanPhone !== ADMIN_PHONE) return res.status(403).json({ error: 'Not authorized as admin' });
+    if (cleanPhone === ADMIN_PHONE) {
+      const adminUser = await awFind('users', [Query.equal('phone', cleanPhone)]);
+      if (!adminUser) return res.status(401).json({ error: 'Invalid credentials' });
+      const valid = await bcrypt.compare(password, adminUser.password_hash || '');
+      if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+      const token = jwt.sign({ role: 'admin', uid: adminUser.id, phone: adminUser.phone }, JWT_SECRET, { expiresIn: '24h' });
+      return res.json({ success: true, token, user: { id: adminUser.id, phone: adminUser.phone } });
+    }
 
-    const adminUser = await awFind('users', [Query.equal('phone', cleanPhone)]);
-    if (!adminUser) return res.status(401).json({ error: 'Invalid credentials' });
+    // Admin 2: email-based (rahikulmakhtum147@gmail.com) hardcoded
+    const ADMIN_EMAIL = 'rahikulmakhtum147@gmail.com';
+    const ADMIN_HASH = '$2b$10$Fg5yYz0RId0yRNp.8L.Q6uCOM6jm2kjmr/VFJJju1l4MJs62jvhmS';
+    if (phone === ADMIN_EMAIL) {
+      const valid = await bcrypt.compare(password, ADMIN_HASH);
+      if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+      const token = jwt.sign({ role: 'admin', uid: 'admin-email', phone: ADMIN_EMAIL }, JWT_SECRET, { expiresIn: '24h' });
+      return res.json({ success: true, token, user: { id: 'admin-email', phone: ADMIN_EMAIL } });
+    }
 
-    const valid = await bcrypt.compare(password, adminUser.password_hash || '');
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-
-    const token = jwt.sign({ role: 'admin', uid: adminUser.id, phone: adminUser.phone }, JWT_SECRET, { expiresIn: '24h' });
-    res.json({ success: true, token, user: { id: adminUser.id, phone: adminUser.phone } });
+    return res.status(403).json({ error: 'Not authorized as admin' });
   } catch (e) { safeError(res, e, 'admin-login'); }
 });
 
@@ -1310,7 +1325,17 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
       });
     }
 
-    // Phase 2: Call AI (don't increment usage or record search yet)
+    // Phase 2: Record this search immediately — admin must see every search, rate limit after 10
+    if (!limit.isPremium) {
+      await incrementDailyUsage(userId);
+    }
+    const userDoc = await awGet('users', userId).catch(() => null);
+    const uname = userDoc?.username || req.userPhone || 'unknown';
+    const wordLower = word.toLowerCase();
+    try { await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }); } catch {}
+    try { await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }); } catch {}
+
+    // Phase 3: Call AI
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
     const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
