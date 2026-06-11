@@ -1377,7 +1377,7 @@ app.post('/api/ai-analyze', async (req, res) => {
   "phonetic": "/pronunciation/",
   "meaning": {
     "english": "clear beginner-friendly definition",
-    "bangla": "বাংলা অনুবাদ (required)"
+    "bangla": "প্রাকৃতিক বাংলা অনুবাদ — must sound native, NOT literal or AI-sounding"
   },
   "partsOfSpeech": [
     { "type": "Noun", "definition": "explanation as noun" }
@@ -1392,7 +1392,7 @@ app.post('/api/ai-analyze', async (req, res) => {
   "ieltsBand": 7.5
 }
 Requirements:
-- meaning.bangla is REQUIRED — always provide Bengali translation
+- meaning.bangla is REQUIRED — must be native natural Bengali, use idioms a Bengali speaker would naturally use, NOT literal/AI translation
 - synonyms and antonyms MUST be JSON arrays of strings (not comma-separated)
 - partsOfSpeech is an array of {type, definition} objects — include ALL applicable types
 - ieltsBand is a number (6.0-9.0) estimating word difficulty
@@ -1451,6 +1451,86 @@ Requirements:
       ...aiResult, _meta: { dailyRemaining: -1, isPremium: true },
     });
   } catch (e) { safeError(res, e, 'ai-analyze'); }
+});
+
+// ── AI Sentence Analyze ──────────────────────────────────────────────
+app.post('/api/ai-analyze-sentence', async (req, res) => {
+  try {
+    const { sentence, user_id } = req.body;
+    if (!sentence) return res.status(400).json({ error: 'Sentence required' });
+
+    const userId = user_id || 'unknown';
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    const GROQ_API_KEY = process.env.GROQ_API_KEY;
+    const GROQ_API_KEY_2 = process.env.GROQ_API_KEY_2;
+
+    let config = { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiGeminiModel: 'gemini-2.0-flash', aiEnabled: true };
+    try {
+      const d = await awGet('app_config', '1');
+      if (d) config = { ...config, aiProvider: d.ai_provider, aiModel: d.ai_model, aiGeminiModel: d.ai_gemini_model, aiEnabled: d.ai_enabled };
+    } catch {}
+    if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
+
+    const prompt = `Analyze the English sentence: "${sentence}"
+
+Return ONLY valid JSON (no markdown, no code block, no trailing commas). Use this exact format:
+{
+  "sentence": "${sentence}",
+  "meaning": {
+    "english": "natural English paraphrase of the entire sentence",
+    "bangla": "প্রাকৃতিক বাংলা অনুবাদ — must sound like a native Bengali speaker wrote it, use natural idioms and phrasing, NO literal or AI-sounding translation"
+  },
+  "words": [
+    { "word": "word1", "partOfSpeech": "POS", "meaning": "meaning of word in this context", "definition": "detailed grammatical definition" }
+  ],
+  "grammarNotes": "explain the sentence structure, tense, grammar rules, and how each part connects",
+  "usage": "when and how this sentence is used in real conversation or writing, register (formal/informal)",
+  "tone": "neutral | formal | informal | literary",
+  "difficulty": "beginner | intermediate | advanced",
+  "alternatives": ["alternative phrasing 1", "alt 2", "alt 3"],
+  "errors": "common grammar mistakes learners make with this type of sentence"
+}
+
+Requirements:
+- meaning.bangla MUST be native, natural Bengali — imagine a skilled translator wrote it. Use natural Bangla idioms (e.g. "মুখস্থ করা" not "হৃদয় দিয়ে শেখা"). AVOID literal word-for-word translation that sounds like Google Translate.
+- words MUST include EVERY word in the sentence with accurate part of speech and context-specific meaning
+- grammarNotes should be detailed but beginner-friendly
+- alternatives should provide 3-5 natural alternative ways to express the same idea
+- errors should highlight 1-2 common mistakes with corrections
+- Return ONLY valid JSON, nothing else`;
+
+    let aiResult = null;
+    if (config.aiProvider === 'gemini' && GEMINI_API_KEY) {
+      try {
+        const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${config.aiGeminiModel}:generateContent?key=${GEMINI_API_KEY}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        });
+        const data = await resp.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        aiResult = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+      } catch {}
+    }
+
+    if (!aiResult && (GROQ_API_KEY || GROQ_API_KEY_2)) {
+      const apiKey = (Math.random() > 0.5 && GROQ_API_KEY_2) ? GROQ_API_KEY_2 : GROQ_API_KEY;
+      try {
+        const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: config.aiModel, messages: [{ role: 'user', content: prompt }], temperature: 0.3 }),
+        });
+        const data = await resp.json();
+        const text = data?.choices?.[0]?.message?.content || '';
+        aiResult = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim());
+      } catch {}
+    }
+
+    if (!aiResult) return res.status(502).json({ error: 'Sentence analysis failed. Please try again.' });
+
+    res.json(aiResult);
+  } catch (e) { safeError(res, e, 'ai-analyze-sentence'); }
 });
 
 app.post('/api/ai/generate-quiz', async (req, res) => {
