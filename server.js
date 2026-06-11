@@ -1340,12 +1340,12 @@ app.delete('/api/admin/reports/:id', requireAdmin, async (req, res) => {
 });
 
 // ── AI Analyze ───────────────────────────────────────────────────────
-app.post('/api/ai-analyze', requireJwt, async (req, res) => {
+app.post('/api/ai-analyze', async (req, res) => {
   try {
-    const { word } = req.body;
+    const { word, user_id } = req.body;
     if (!word) return res.status(400).json({ error: 'Word required' });
 
-    const userId = req.userId;
+    const userId = user_id || 'unknown';
 
     // Phase 1: Check daily usage
     const limit = await checkDailyUsage(userId);
@@ -1416,7 +1416,7 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
 
     // Phase 3: Record search event
     const userDoc = await awGet('users', userId).catch(() => null);
-    const uname = userDoc?.username || req.userPhone || 'unknown';
+    const uname = userDoc?.username || userId;
     const wordLower = word.toLowerCase();
     await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }).catch(() => {});
     await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }).catch(() => {});
