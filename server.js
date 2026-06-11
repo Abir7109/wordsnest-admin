@@ -941,6 +941,37 @@ app.post('/api/register-fcm', async (req, res) => {
   } catch (e) { safeError(res, e, 'register-fcm'); }
 });
 
+// ── Guest Registration ───────────────────────────────────────────────
+app.post('/api/register', async (req, res) => {
+  try {
+    const { userId, phone, username, password, deviceName } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    const existing = await awGet('users', userId);
+    if (!existing) {
+      const now = new Date().toISOString();
+      await awCreate('users', userId, {
+        phone: phone || userId,
+        username: username || userId.split('-')[0] || userId,
+        status: 'active',
+        created_at: now,
+        last_active: now,
+        device_name: deviceName || '',
+      });
+    } else {
+      await awUpdate('users', userId, { last_active: new Date().toISOString() });
+    }
+
+    await awUpsert('user_subscriptions',
+      userId, { user_id: userId, plan: 'free', active: false, lifetime_free: false }
+    );
+
+    const token = createToken(phone || userId, userId);
+    const uname = existing?.username || username || userId.split('-')[0] || userId;
+    res.json({ success: true, userId, token, phone: phone || userId, username: uname });
+  } catch (e) { safeError(res, e, 'register'); }
+});
+
 // ── Auth ─────────────────────────────────────────────────────────────
 app.post('/api/auth/exchange-token', async (req, res) => {
   try {
