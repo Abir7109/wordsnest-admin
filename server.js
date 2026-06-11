@@ -960,7 +960,7 @@ app.post('/api/auth/register', async (req, res) => {
     await awCreate('users', uid, {
       email: cleanEmail, phone: cleanPhone, username: cleanUsername, password_hash: hashedPassword,
       device_name: sanitize(deviceName || ''), status: 'active',
-      created_at: now, last_active: now, app_version: req.body.appVersion || '2.0.0',
+      created_at: now, last_active: now, app_version: req.body.appVersion || '1.4.3',
     });
 
     await awUpsert('user_subscriptions',

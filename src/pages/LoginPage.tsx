@@ -110,7 +110,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
           </form>
         </div>
 
-        <p className="text-center text-xs text-[#B8A99A] mt-6">Words Nest Admin v2.0</p>
+        <p className="text-center text-xs text-[#B8A99A] mt-6">Words Nest Admin v1.4.3</p>
       </motion.div>
     </div>
   );

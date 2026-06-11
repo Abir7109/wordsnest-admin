@@ -23,7 +23,7 @@ export function Sidebar({ tabs, activeTab, onTabChange, onLogout }: SidebarProps
           <span className="text-2xl">🪺</span>
           <div>
             <h1 className="text-lg font-bold text-[#2A170F] tracking-tight">Words Nest</h1>
-            <p className="text-xs text-[#897365]">Admin Panel v2.0</p>
+            <p className="text-xs text-[#897365]">Admin Panel v1.4.3</p>
           </div>
         </div>
       </div>
