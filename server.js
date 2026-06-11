@@ -204,10 +204,7 @@ function sanitize(str) {
 }
 
 function isPremium(user) {
-  if (!user) return false;
-  if (user.lifetime_free) return true;
-  if (user.subscription?.active && user.subscription?.expiresAt > Date.now()) return true;
-  return false;
+  return true;
 }
 
 function countByDay(docs, field = 'timestamp') {
@@ -310,45 +307,11 @@ async function awGetUser(id) {
 }
 
 async function checkDailyUsage(userId) {
-  const today = getTodayStr();
-  const user = await awGet('users', userId).catch(() => null);
-  if (!user) return { allowed: false, remaining: 0, reason: 'user_not_found' };
-
-  const premium = isPremium(user);
-  if (premium) return { allowed: true, remaining: -1, isPremium: true, count: 0 };
-
-  // Check for active cooldown FIRST (admin-set or system-set)
-  if (user.cooldown_until) {
-    const cooldownTime = new Date(user.cooldown_until).getTime();
-    if (cooldownTime > Date.now()) {
-      return { allowed: false, remaining: 0, reason: 'cool_down', coolDownUntil: cooldownTime };
-    }
-    // Cooldown has expired — clean it up
-    await awUpdate('users', userId, { cooldown_until: null });
-  }
-
-  const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
-  const count = usage?.count || 0;
-
-  if (count >= 10) {
-    await awUpdate('users', userId, { rate_limit_hits: (user.rate_limit_hits || 0) + 1 });
-    return { allowed: false, remaining: 0, reason: 'limit_reached' };
-  }
-
-  return { allowed: true, remaining: 10 - count, isPremium: false, count: count };
+  return { allowed: true, remaining: -1, isPremium: true, count: 0 };
 }
 
 async function incrementDailyUsage(userId) {
-  const today = getTodayStr();
-  const usage = await awFind('daily_usage', [Query.equal('user_id', userId), Query.equal('date', today)]);
-  const count = usage?.count || 0;
-
-  if (usage) {
-    await awUpdate('daily_usage', usage.id, { count: count + 1 });
-  } else {
-    await awCreate('daily_usage', crypto.randomUUID(), { user_id: userId, date: today, count: 1 });
-  }
-  await awUpdate('users', userId, { last_active: new Date().toISOString() });
+  // No-op — unlimited for all users
 }
 
 // ── Health ───────────────────────────────────────────────────────────
@@ -1451,28 +1414,15 @@ app.post('/api/ai-analyze', requireJwt, async (req, res) => {
       });
     }
 
-    // Phase 3: AI succeeded — now record the search and usage
-    if (!limit.isPremium) {
-      await incrementDailyUsage(userId);
-    }
-    const postRemaining = limit.isPremium ? -1 : Math.max(0, limit.remaining - 1);
+    // Phase 3: Record search event
     const userDoc = await awGet('users', userId).catch(() => null);
     const uname = userDoc?.username || req.userPhone || 'unknown';
     const wordLower = word.toLowerCase();
     await awCreate('search_events', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }).catch(() => {});
     await awCreate('search_history', crypto.randomUUID(), { user_id: userId, username: uname, word: wordLower, timestamp: new Date().toISOString() }).catch(() => {});
 
-    // Phase 4: Gate premium fields for free users
-    if (!limit.isPremium) {
-      aiResult.banglaMeaning = '';
-      aiResult.ieltsBand = '';
-      aiResult.simpleSentence = '';
-      aiResult.complexSentence = '';
-      aiResult.compoundSentence = '';
-    }
-
     res.json({
-      ...aiResult, _meta: { dailyRemaining: postRemaining, isPremium: limit.isPremium || false },
+      ...aiResult, _meta: { dailyRemaining: -1, isPremium: true },
     });
   } catch (e) { safeError(res, e, 'ai-analyze'); }
 });
