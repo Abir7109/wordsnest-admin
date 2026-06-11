@@ -1371,7 +1371,33 @@ app.post('/api/ai-analyze', async (req, res) => {
 
     if (!config.aiEnabled) return res.status(503).json({ error: 'AI features disabled' });
 
-    const prompt = `Analyze the English word "${word}" and return ONLY valid JSON (no markdown, no code block). Format: { "word": "...", "type": "Noun|Verb|Adjective|Adverb|Preposition|Conjunction|Pronoun|Interjection", "definition": "a VERY SIMPLE, beginner-friendly definition (use everyday words, keep it short — imagine explaining to a child)", "phonetic": "/.../", "synonyms": "comma,separated", "antonyms": "comma,separated", "simpleSentence": "...", "complexSentence": "...", "compoundSentence": "...", "nounForm": "the noun form of this word (REQUIRED — if the word itself is a noun, return the word; otherwise provide the noun form; empty if no noun form exists like for 'the')", "verbForm": "the verb form (REQUIRED — if the word itself is a verb, return the word; otherwise provide the verb form; empty if none)", "adjectiveForm": "the adjective form (REQUIRED — if the word itself is an adjective, return the word; otherwise provide the adjective form; empty if none)", "adverbForm": "the adverb form (REQUIRED — if the word itself is an adverb, return the word; otherwise provide the adverb form; empty if none)", "banglaMeaning": "Bangla translation of the word (REQUIRED — always provide the meaning in Bangla/Bengali script, e.g. 'সুন্দর' for 'beautiful')", "ieltsBand": "estimated IELTS band score 6.0-9.0 (REQUIRED — always estimate the difficulty level of this word, e.g. 7.5)" }`;
+    const prompt = `Analyze the English word "${word}" and return ONLY valid JSON (no markdown, no code block, no trailing commas). Use this exact format:
+{
+  "word": "${word}",
+  "phonetic": "/pronunciation/",
+  "meaning": {
+    "english": "clear beginner-friendly definition",
+    "bangla": "বাংলা অনুবাদ (required)"
+  },
+  "partsOfSpeech": [
+    { "type": "Noun", "definition": "explanation as noun" }
+  ],
+  "synonyms": ["word1", "word2", "word3"],
+  "antonyms": ["word1", "word2"],
+  "sentences": {
+    "simple": "simple example sentence",
+    "complex": "complex example sentence",
+    "compound": "compound example sentence"
+  },
+  "ieltsBand": 7.5
+}
+Requirements:
+- meaning.bangla is REQUIRED — always provide Bengali translation
+- synonyms and antonyms MUST be JSON arrays of strings (not comma-separated)
+- partsOfSpeech is an array of {type, definition} objects — include ALL applicable types
+- ieltsBand is a number (6.0-9.0) estimating word difficulty
+- All sentences (simple, complex, compound) are REQUIRED
+- Return ONLY valid JSON, nothing else`;
 
     let aiResult = null;
     if (config.aiProvider === 'gemini' && GEMINI_API_KEY) {
@@ -1475,10 +1501,10 @@ app.post('/api/ai/generate-quiz', async (req, res) => {
   } catch (e) { safeError(res, e, 'ai-generate-quiz'); }
 });
 
-app.post('/api/generate', requireJwt, async (req, res) => {
+app.post('/api/generate', async (req, res) => {
   try {
-    const { type, prompt: userPrompt } = req.body;
-    const userId = req.userId;
+    const { word } = req.body;
+    if (!word) return res.status(400).json({ error: 'Word required' });
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
     let config = { aiProvider: 'groq', aiModel: 'llama-3.3-70b-versatile', aiEnabled: true };
@@ -1490,15 +1516,46 @@ app.post('/api/generate', requireJwt, async (req, res) => {
 
     if (!GROQ_API_KEY) return res.status(503).json({ error: 'AI not configured' });
 
+    const prompt = `Analyze the English word "${word}" and return ONLY valid JSON (no markdown, no code block, no trailing commas). Use this exact format:
+{
+  "word": "${word}",
+  "phonetic": "/pronunciation/",
+  "meaning": {
+    "english": "clear beginner-friendly definition",
+    "bangla": "বাংলা অনুবাদ (required)"
+  },
+  "partsOfSpeech": [
+    { "type": "Noun", "definition": "explanation as noun" }
+  ],
+  "synonyms": ["word1", "word2", "word3"],
+  "antonyms": ["word1", "word2"],
+  "sentences": {
+    "simple": "simple example sentence",
+    "complex": "complex example sentence",
+    "compound": "compound example sentence"
+  },
+  "ieltsBand": 7.5
+}
+Requirements:
+- meaning.bangla is REQUIRED — always provide Bengali translation
+- synonyms and antonyms MUST be JSON arrays of strings (not comma-separated)
+- partsOfSpeech is an array of {type, definition} objects — include ALL applicable types
+- ieltsBand is a number (6.0-9.0) estimating word difficulty
+- All sentences (simple, complex, compound) are REQUIRED
+- Return ONLY valid JSON, nothing else`;
+
     const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: config.aiModel, messages: [{ role: 'user', content: userPrompt }], temperature: 0.7 }),
+      body: JSON.stringify({ model: config.aiModel, messages: [{ role: 'user', content: prompt }], temperature: 0.3 }),
     });
     const data = await resp.json();
     const text = data?.choices?.[0]?.message?.content || '';
+    let aiResult = null;
+    try { aiResult = JSON.parse(text.replace(/```json/g, '').replace(/```/g, '').trim()); } catch {}
+    if (!aiResult) return res.status(502).json({ error: 'AI generation failed' });
 
-    res.json({ result: text });
+    res.json(aiResult);
   } catch (e) { safeError(res, e, 'generate'); }
 });
 
