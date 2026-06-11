@@ -400,6 +400,7 @@ export default function Users() {
               <th className="p-3 font-medium">Rate Limit</th>
               <th className="p-3 font-medium">Daily Used</th>
               <th className="p-3 font-medium">Device</th>
+              <th className="p-3 font-medium">Version</th>
               <th className="p-3 font-medium">Words</th>
               <th className="p-3 font-medium">Last Active</th>
               <th className="p-3 font-medium text-right">Actions</th>
@@ -459,6 +460,7 @@ export default function Users() {
                   </td>
                   <td className="p-3 text-xs text-[#897365]">{dailyUsed}/10 {dailyDate ? `(${new Date(dailyDate).toLocaleDateString()})` : ''}</td>
                   <td className="p-3 text-xs text-[#897365] max-w-[100px] truncate" title={user.deviceName || user.device_model}>{user.deviceName || user.device_model || '—'}</td>
+                  <td className="p-3 text-xs text-[#897365]">{user.app_version || '—'}</td>
                   <td className="p-3 font-medium text-[#AA7137]">{user.wordCount || 0}</td>
                   <td className="p-3 text-[#897365] text-xs whitespace-nowrap">{timeAgo(user.lastActive)}</td>
                   <td className="p-3 text-right">

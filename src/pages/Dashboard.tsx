@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
-import { Users, Search, BookOpen, Brain, TrendingUp, Clock, Zap, Target, Activity, UserPlus, BarChart3, Sparkles, Layers, RefreshCw } from 'lucide-react';
+import { Users, Search, BookOpen, Brain, TrendingUp, Clock, Zap, Target, Activity, UserPlus, BarChart3, Sparkles, Layers, RefreshCw, Smartphone } from 'lucide-react';
 import type { DashboardStats, TimelineDay, TopWord, TopSearch, WordTypeStat, RecentActivity } from '../types';
 import { apiFetch } from '../api';
 
@@ -233,6 +233,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [appVersion, setAppVersion] = useState('');
 
   useEffect(() => {
     const load = () => {
@@ -244,14 +245,16 @@ export default function Dashboard() {
         apiFetch(`${window.location.origin}/api/dashboard/top-searches`).then(r => { if (!r.ok) throw new Error(`/api/top-searches: HTTP ${r.status}`); return r.json(); }),
         apiFetch(`${window.location.origin}/api/dashboard/word-types`).then(r => { if (!r.ok) throw new Error(`/api/word-types: HTTP ${r.status}`); return r.json(); }),
         apiFetch(`${window.location.origin}/api/dashboard/recent-activity`).then(r => { if (!r.ok) throw new Error(`/api/activity: HTTP ${r.status}`); return r.json(); }),
+        apiFetch(`${window.location.origin}/api/app-config`).then(r => { if (!r.ok) throw new Error(`/api/app-config: HTTP ${r.status}`); return r.json(); }),
       ])
-        .then(([statsData, timelineData, wordsData, searchesData, typesData, activityData]) => {
+        .then(([statsData, timelineData, wordsData, searchesData, typesData, activityData, configData]) => {
           setStats(statsData);
           setTimeline(timelineData.timeline || []);
           setTopWords(wordsData.topWords || []);
           setTopSearches(searchesData.topSearches || []);
           setWordTypes(typesData.distribution || []);
           setActivity(activityData.activities || []);
+          setAppVersion(configData.currentVersion || '');
           setLoading(false);
         })
         .catch(err => {
@@ -319,6 +322,9 @@ export default function Dashboard() {
           <p className="text-sm text-[#897365] mt-0.5">Overview of your Words Nest application</p>
         </div>
         <div className="flex items-center gap-2 bg-[#FFFBF5] border border-[#E8DDD0] rounded-lg px-3 py-2">
+          <Smartphone className="w-4 h-4 text-[#897365]" />
+          <span className="text-xs font-medium text-[#AA7137]">v{appVersion}</span>
+          <div className="w-px h-4 bg-[#E8DDD0]" />
           <Clock className="w-4 h-4 text-[#897365]" />
           <span className="text-xs text-[#897365]">Live</span>
           <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />

@@ -40,10 +40,12 @@ export default function Notifications() {
   const [aiConfigLoading, setAiConfigLoading] = useState(true);
   const [aiLastSent, setAiLastSent] = useState(0);
   const [aiNextSend, setAiNextSend] = useState(0);
+  const [currentVersion, setCurrentVersion] = useState('');
 
   useEffect(() => {
     refreshHistory();
     loadAiConfig();
+    loadAppConfig();
     const interval = setInterval(refreshHistory, 60000);
     return () => clearInterval(interval);
   }, []);
@@ -82,6 +84,14 @@ export default function Notifications() {
     setAiSaving(false);
   };
 
+  const loadAppConfig = async () => {
+    try {
+      const res = await apiFetch(`${window.location.origin}/api/app-config`);
+      const data = await res.json();
+      if (data.currentVersion) setCurrentVersion(data.currentVersion);
+    } catch (e) { /* ignore */ }
+  };
+
   const refreshHistory = () => {
     apiFetch(`${window.location.origin}/api/admin/notifications`)
       .then(r => r.json())
@@ -113,7 +123,7 @@ export default function Notifications() {
 
   const applyTemplate = (template) => {
     setTitle(template.title);
-    setMessage(template.message);
+    setMessage(template.message.replace('{version}', currentVersion));
   };
 
   const successful = history.filter(n => n.success).length;
