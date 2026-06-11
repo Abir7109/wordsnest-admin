@@ -835,9 +835,48 @@ app.post('/api/app-config', requireAdmin, async (req, res) => {
     await awUpdate('app_config', '1', req.body);
     appConfigCache.data = null;
     appConfigCache.ts = 0;
+
+    // Sync to Firebase Firestore (background, non-blocking)
+    syncFirestoreConfig(req.body).catch(e => console.error('[FIREBASE_SYNC]', e?.message));
+
     res.json({ success: true });
   } catch (e) { safeError(res, e, 'app-config-update'); }
 });
+
+async function syncFirestoreConfig(body) {
+  const fsFields = {};
+  const map = {
+    forceUpdate: 'booleanValue', force_update: 'booleanValue',
+    softUpdate: 'booleanValue', soft_update: 'booleanValue',
+    underMaintenance: 'booleanValue', under_maintenance: 'booleanValue',
+    isAppAlive: 'booleanValue', is_app_alive: 'booleanValue',
+    enableLeaderboard: 'booleanValue', enableNotifications: 'booleanValue',
+    enableBackup: 'booleanValue', adsEnabled: 'booleanValue',
+    aiEnabled: 'booleanValue',
+    currentVersion: 'stringValue', current_version: 'stringValue',
+    minRequiredVersion: 'stringValue', min_required_version: 'stringValue',
+    updateUrl: 'stringValue', update_url: 'stringValue',
+    updateMessage: 'stringValue', update_message: 'stringValue',
+    maintenanceTitle: 'stringValue', maintenance_title: 'stringValue',
+    maintenanceMessage: 'stringValue', maintenance_message: 'stringValue',
+    maintenanceEstimatedTime: 'stringValue', maintenance_estimated_time: 'stringValue',
+    aiProvider: 'stringValue', aiModel: 'stringValue', aiGeminiModel: 'stringValue',
+    dailyQuizLimit: 'integerValue', dailyWordLimit: 'integerValue',
+  };
+  for (const [key, type] of Object.entries(map)) {
+    const val = body[key];
+    if (val === undefined || val === null) continue;
+    if (type === 'booleanValue') fsFields[key] = { [type]: !!val };
+    else if (type === 'integerValue') fsFields[key] = { [type]: String(val) };
+    else fsFields[key] = { [type]: String(val) };
+  }
+  const url = 'https://firestore.googleapis.com/v1/projects/words-nest/databases/(default)/documents/current_version/config';
+  await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: fsFields }),
+  });
+}
 
 // ── Notifications ────────────────────────────────────────────────────
 app.post('/api/notifications/send', requireAdmin, async (req, res) => {
